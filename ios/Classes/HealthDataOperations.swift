@@ -45,35 +45,39 @@ class HealthDataOperations {
         else {
             throw PluginError(message: "Invalid Arguments!")
         }
-
+        
         if let nutritionIndex = types.firstIndex(of: HealthConstants.NUTRITION) {
             types.remove(at: nutritionIndex)
             let nutritionPermission = permissions[nutritionIndex]
             permissions.remove(at: nutritionIndex)
-
+            
             for nutritionType in nutritionList {
                 types.append(nutritionType)
                 permissions.append(nutritionPermission)
             }
         }
-
+        
         for (index, type) in types.enumerated() {
             guard let sampleType = dataTypesDict[type] else {
                 print("Warning: Health data type '\(type)' not found in dataTypesDict")
                 result(false)
                 return
             }
+            
 
-            let success = hasPermission(type: sampleType, access: permissions[index])
-            if success == nil || success == false {
-                result(success)
+            let status = hasPermission(type: sampleType, access: permissions[index])
+            
+            if(status == HKAuthorizationStatus.notDetermined || status == HKAuthorizationStatus.sharingDenied) {
+                result(false)
                 return
             }
+
+           
             if let characteristicType = characteristicsTypesDict[type] {
-                let characteristicSuccess = hasPermission(
+                let characteristicStatus = hasPermission(
                     type: characteristicType, access: permissions[index])
-                if characteristicSuccess == nil || characteristicSuccess == false {
-                    result(characteristicSuccess)
+                if characteristicStatus == HKAuthorizationStatus.notDetermined || characteristicStatus == HKAuthorizationStatus.sharingDenied {
+                    result(false)
                     return
                 }
             }
@@ -87,17 +91,19 @@ class HealthDataOperations {
     ///   - type: The object type to check
     ///   - access: Access level (0: read, 1: write, other: read/write)
     /// - Returns: Bool or nil depending on permission status
-    private func hasPermission(type: HKObjectType, access: Int) -> Bool? {
+    private func hasPermission(type: HKObjectType, access: Int) -> HKAuthorizationStatus? {
         if #available(iOS 13.0, *) {
             let status = healthStore.authorizationStatus(for: type)
-            switch access {
-            case 0:  // READ
-                return nil
-            case 1:  // WRITE
-                return (status == HKAuthorizationStatus.sharingAuthorized)
-            default:  // READ_WRITE
-                return nil
-            }
+            return status;
+            //TODO check status with access
+//            switch access {
+//            case 0:  // READ
+//                return nil
+//            case 1:  // WRITE
+//                return (status == HKAuthorizationStatus.sharingAuthorized)
+//            default:  // READ_WRITE
+//                return nil
+//            }
         } else {
             return nil
         }
@@ -319,5 +325,56 @@ class HealthDataOperations {
         }
 
         healthStore.execute(query)
+    }
+    
+    /// Delete health data by date range
+    /// - Parameters:
+    ///   - call: Flutter method call
+    ///   - result: Flutter result callback
+    func deleteMeals(call: FlutterMethodCall, result: @escaping FlutterResult) throws {
+
+        guard let arguments = call.arguments as? NSDictionary,
+              let startDate = (arguments["startTime"] as? NSNumber),
+              let endDate = (arguments["endTime"] as? NSNumber)
+        else {
+            print("Error: Missing startTime or endTime in arguments")
+            result(false)
+            return
+        }
+
+        let dateFrom = HealthUtilities.dateFromMilliseconds(startDate.doubleValue)
+        let dateTo = HealthUtilities.dateFromMilliseconds(endDate.doubleValue)
+        
+        guard dateFrom <= dateTo else {
+                print("Error: startTime must be <= endTime")
+                result(false)
+                return
+            }
+        
+        let samplePredicate = HKQuery.predicateForSamples(
+            withStart: dateFrom, end: dateTo, options: .strictStartDate)
+        let ownerPredicate = HKQuery.predicateForObjects(from: HKSource.default())
+        let predicate      = NSCompoundPredicate(andPredicateWithSubpredicates: [samplePredicate, ownerPredicate])
+        
+        let group = DispatchGroup()
+        var overallSuccess = true
+        
+        for nutritionDataTypeKey in nutritionList {
+            let nutritionDataType = dataTypesDict[nutritionDataTypeKey]!
+            group.enter()
+            healthStore.deleteObjects(of: nutritionDataType, predicate: predicate) { success, count, error in
+                if let err = error {
+                    print("Error deleting \(nutritionDataType): \(err.localizedDescription)")
+                }
+                
+                overallSuccess = overallSuccess && success
+                group.leave()
+            }
+        }
+        
+        group.notify(queue: .main) {
+            result(overallSuccess)
+        }
+        
     }
 }

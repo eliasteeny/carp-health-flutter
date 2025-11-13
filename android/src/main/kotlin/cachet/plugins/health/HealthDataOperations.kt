@@ -1,17 +1,28 @@
 package cachet.plugins.health
 
+import android.app.Activity
+import android.content.Context
+import android.os.Handler
 import android.util.Log
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.HealthConnectFeatures
 import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.permission.HealthPermission.Companion.PERMISSION_READ_HEALTH_DATA_HISTORY
 import androidx.health.connect.client.permission.HealthPermission.Companion.PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND
+import androidx.health.connect.client.records.NutritionRecord
 import androidx.health.connect.client.time.TimeRangeFilter
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.fitness.Fitness
+import com.google.android.gms.fitness.FitnessOptions
+import com.google.android.gms.fitness.data.DataType
+import com.google.android.gms.fitness.request.DataDeleteRequest
+import com.google.android.gms.tasks.OnFailureListener
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel.Result
 import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import java.util.concurrent.TimeUnit
 
 /**
  * Handles Health Connect operational tasks including permissions, SDK status, and data deletion
@@ -42,24 +53,42 @@ class HealthDataOperations(
      * @param call Method call containing 'types' (data types) and 'permissions' (access levels)
      * @param result Flutter result callback returning boolean permission status
      */
-    fun hasPermissions(call: MethodCall, result: Result) {
-        val args = call.arguments as HashMap<*, *>
-        val types = (args["types"] as? ArrayList<*>)?.filterIsInstance<String>()!!
-        val permissions = (args["permissions"] as? ArrayList<*>)?.filterIsInstance<Int>()!!
+    fun hasPermissions(call: MethodCall, result: Result,  useGoogleFit: Boolean, context : Context?) {
+        if(useGoogleFit) {
+            if (context == null) {
+                result.success(false)
+                return
+            }
 
-        val permList = preparePermissionsListInternal(types, permissions)
-        if (permList == null) {
-            result.success(false)
-            return
-        }
+            val optionsToRegister = HealthConstants. callToGoogleFitHealthTypes(call)
 
-        scope.launch {
-            result.success(
+            val isGranted =
+                GoogleSignIn.hasPermissions(
+                    GoogleSignIn.getLastSignedInAccount(context!!),
+                    optionsToRegister,
+                )
+
+            result?.success(isGranted)
+        }else {
+
+            val args = call.arguments as HashMap<*, *>
+            val types = (args["types"] as? ArrayList<*>)?.filterIsInstance<String>()!!
+            val permissions = (args["permissions"] as? ArrayList<*>)?.filterIsInstance<Int>()!!
+
+            val permList = preparePermissionsListInternal(types, permissions)
+            if (permList == null) {
+                result.success(false)
+                return
+            }
+
+            scope.launch {
+                result.success(
                     healthConnectClient
-                            .permissionController
-                            .getGrantedPermissions()
-                            .containsAll(permList),
-            )
+                        .permissionController
+                        .getGrantedPermissions()
+                        .containsAll(permList),
+                )
+            }
         }
     }
 
@@ -87,12 +116,40 @@ class HealthDataOperations(
      * @param call Method call from Flutter (unused)
      * @param result Flutter result callback returning success status
      */
-    fun revokePermissions(call: MethodCall, result: Result) {
-        scope.launch {
-            Log.i("FLUTTER_HEALTH", "Revoking all Health Connect permissions")
-            healthConnectClient.permissionController.revokeAllPermissions()
+    fun revokePermissions(call: MethodCall, result: Result,  useGoogleFit: Boolean, context : Context?, activity : Activity? ) {
+
+        if(useGoogleFit) {
+
+            if (activity == null || context == null) {
+                result.success(false)
+                return
+            }
+
+            Fitness.getConfigClient(
+                activity,
+                GoogleSignIn.getLastSignedInAccount(context)!!
+            )
+                .disableFit()
+                .addOnSuccessListener {
+                    Log.i("Health", "Disabled Google Fit")
+                    result.success(true)
+                }
+                .addOnFailureListener { e ->
+                    Log.w(
+                        "Health",
+                        "There was an error disabling Google Fit",
+                        e
+                    )
+                    result.success(false)
+                }
+        } else {
+
+            scope.launch {
+                Log.i("FLUTTER_HEALTH", "Revoking all Health Connect permissions")
+                healthConnectClient.permissionController.revokeAllPermissions()
+            }
+            result.success(true)
         }
-        result.success(true)
     }
 
     /**
@@ -172,35 +229,185 @@ class HealthDataOperations(
      * @param call Method call containing 'dataTypeKey', 'startTime', and 'endTime'
      * @param result Flutter result callback returning boolean success status
      */
-    fun deleteData(call: MethodCall, result: Result) {
-        val type = call.argument<String>("dataTypeKey")!!
-        val startTime = Instant.ofEpochMilli(call.argument<Long>("startTime")!!)
-        val endTime = Instant.ofEpochMilli(call.argument<Long>("endTime")!!)
+    fun deleteData(call: MethodCall, result: Result, useGoogleFit: Boolean, context : Context?) {
+        if(useGoogleFit) {
+            if (context == null) {
+                result.success(false)
+                return
+            }
 
-        if (!HealthConstants.mapToType.containsKey(type)) {
-            Log.w("FLUTTER_HEALTH::ERROR", "Datatype $type not found in HC")
-            result.success(false)
-            return
-        }
+            val type = call.argument<String>("dataTypeKey")!!
+            val startTime = call.argument<Long>("startTime")!!
+            val endTime = call.argument<Long>("endTime")!!
 
-        val classType = HealthConstants.mapToType[type]!!
+            // Look up data type and unit for the type key
+            val dataType = HealthConstants.keyToGoogleFitHealthDataType(type)
+            val field = HealthConstants.getGoogleFitField(type)
 
-        scope.launch {
+            val typesBuilder = FitnessOptions.builder()
+            typesBuilder.addDataType(dataType, FitnessOptions.ACCESS_WRITE)
+
+            val dataSource =
+                DataDeleteRequest.Builder()
+                    .setTimeInterval(
+                        startTime,
+                        endTime,
+                        TimeUnit.MILLISECONDS
+                    )
+                    .addDataType(dataType)
+                    .deleteAllSessions()
+                    .build()
+
+            val fitnessOptions = typesBuilder.build()
+
+
             try {
-                healthConnectClient.deleteRecords(
+                val googleSignInAccount =
+                    GoogleSignIn.getAccountForExtension(
+                        context.applicationContext,
+                        fitnessOptions
+                    )
+                Fitness.getHistoryClient(context.applicationContext, googleSignInAccount)
+                    .deleteData(dataSource)
+                    .addOnSuccessListener {
+                        Log.i(
+                            "FLUTTER_HEALTH::SUCCESS",
+                            "Dataset deleted successfully!"
+                        )
+                        result.success(true)
+                    }
+                    .addOnFailureListener(
+                        OnFailureListener { exception ->
+                            Handler(context!!.mainLooper).run { result.success(null) }
+                            Log.e("FLUTTER_HEALTH::ERROR", "Error deleting data: ${exception.message}")
+                        }
+
+                    )
+            } catch (e3: Exception) {
+                result.success(false)
+            }
+        } else {
+
+            val type = call.argument<String>("dataTypeKey")!!
+            val startTime = Instant.ofEpochMilli(call.argument<Long>("startTime")!!)
+            val endTime = Instant.ofEpochMilli(call.argument<Long>("endTime")!!)
+
+            if (!HealthConstants.mapToType.containsKey(type)) {
+                Log.w("FLUTTER_HEALTH::ERROR", "Datatype $type not found in HC")
+                result.success(false)
+                return
+            }
+
+            val classType = HealthConstants.mapToType[type]!!
+
+            scope.launch {
+                try {
+                    healthConnectClient.deleteRecords(
                         recordType = classType,
                         timeRangeFilter = TimeRangeFilter.between(startTime, endTime),
-                )
-                result.success(true)
-                Log.i(
+                    )
+                    result.success(true)
+                    Log.i(
                         "FLUTTER_HEALTH::SUCCESS",
                         "Successfully deleted $type records between $startTime and $endTime"
-                )
-            } catch (e: Exception) {
-                Log.e("FLUTTER_HEALTH::ERROR", "Error deleting $type records: ${e.message}")
+                    )
+                } catch (e: Exception) {
+                    Log.e("FLUTTER_HEALTH::ERROR", "Error deleting $type records: ${e.message}")
+                    result.success(false)
+                }
+            }
+        }
+    }
+
+    /**
+     * Deletes all meal records of a given time range. Performs bulk
+     * deletion based on data type and time window.
+     *
+     * @param call Method call containing 'dataTypeKey', 'startTime', and 'endTime'
+     * @param result Flutter result callback returning boolean success status
+     */
+    fun deleteMeals(call: MethodCall, result: Result, useGoogleFit: Boolean, context : Context?) {
+
+        if(useGoogleFit) {
+            if (context == null) {
+                result.success(false)
+                return
+            }
+
+            val startTime = call.argument<Long>("startTime")!!
+            val endTime = call.argument<Long>("endTime")!!
+
+            // Look up data type and unit for the type key
+            val dataType = DataType.TYPE_NUTRITION
+
+
+            val typesBuilder = FitnessOptions.builder()
+            typesBuilder.addDataType(dataType, FitnessOptions.ACCESS_WRITE)
+
+            val dataSource =
+                DataDeleteRequest.Builder()
+                    .setTimeInterval(
+                        startTime,
+                        endTime,
+                        TimeUnit.MILLISECONDS
+                    )
+                    .addDataType(dataType)
+                    .deleteAllSessions()
+                    .build()
+
+            val fitnessOptions = typesBuilder.build()
+
+
+            try {
+                val googleSignInAccount =
+                    GoogleSignIn.getAccountForExtension(
+                        context.applicationContext,
+                        fitnessOptions
+                    )
+                Fitness.getHistoryClient(context.applicationContext, googleSignInAccount)
+                    .deleteData(dataSource)
+                    .addOnSuccessListener {
+                        Log.i(
+                            "FLUTTER_HEALTH::SUCCESS",
+                            "Meals deleted successfully!"
+                        )
+                        result.success(true)
+                    }
+                    .addOnFailureListener(
+                        OnFailureListener { exception ->
+                            Handler(context!!.mainLooper).run { result.success(null) }
+                            Log.e("FLUTTER_HEALTH::ERROR", "Error deleting meals: ${exception.message}")
+                        }
+
+                    )
+            } catch (e3: Exception) {
                 result.success(false)
             }
         }
+        else
+            {
+                val startTime = Instant.ofEpochMilli(call.argument<Long>("startTime")!!)
+                val endTime = Instant.ofEpochMilli(call.argument<Long>("endTime")!!)
+
+                val classType = NutritionRecord::class;
+
+                scope.launch {
+                    try {
+                        healthConnectClient.deleteRecords(
+                            recordType = classType,
+                            timeRangeFilter = TimeRangeFilter.between(startTime, endTime),
+                        )
+                        result.success(true)
+                        Log.i(
+                            "FLUTTER_HEALTH::SUCCESS",
+                            "Successfully deleted meal records between $startTime and $endTime"
+                        )
+                    } catch (e: Exception) {
+                        Log.e("FLUTTER_HEALTH::ERROR", "Error deleting meal records: ${e.message}")
+                        result.success(false)
+                    }
+                }
+            }
     }
 
     /**

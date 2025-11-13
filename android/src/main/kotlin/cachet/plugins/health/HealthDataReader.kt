@@ -1,8 +1,10 @@
 package cachet.plugins.health
 
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Handler
 import android.util.Log
+import androidx.core.content.ContextCompat
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.*
@@ -11,6 +13,18 @@ import androidx.health.connect.client.request.AggregateRequest
 import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
 import androidx.health.connect.client.units.*
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.fitness.Fitness
+import com.google.android.gms.fitness.FitnessOptions
+import com.google.android.gms.fitness.data.DataPoint
+import com.google.android.gms.fitness.data.DataType
+import com.google.android.gms.fitness.data.Field
+import com.google.android.gms.fitness.data.HealthFields
+import com.google.android.gms.fitness.request.DataReadRequest
+import com.google.android.gms.fitness.request.SessionReadRequest
+import com.google.android.gms.fitness.result.DataReadResponse
+import com.google.android.gms.tasks.OnFailureListener
+import com.google.android.gms.tasks.OnSuccessListener
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel.Result
 import kotlinx.coroutines.CoroutineScope
@@ -18,6 +32,8 @@ import kotlinx.coroutines.launch
 import java.time.Duration
 import java.time.Instant
 import java.time.temporal.ChronoUnit
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.TimeUnit
 
 /**
  * Handles reading and querying health data from Health Connect.
@@ -39,82 +55,174 @@ class HealthDataReader(
      * @param call Method call containing 'dataTypeKey', 'startTime', 'endTime', 'recordingMethodsToFilter'
      * @param result Flutter result callback returning list of health data maps
      */
-    fun getData(call: MethodCall, result: Result) {
-        val dataType = call.argument<String>("dataTypeKey")!!
-        val dataUnit: String? = call.argument<String>("dataUnitKey")
-        val startTime = Instant.ofEpochMilli(call.argument<Long>("startTime")!!)
-        val endTime = Instant.ofEpochMilli(call.argument<Long>("endTime")!!)
-        val healthConnectData = mutableListOf<Map<String, Any?>>()
-        val recordingMethodsToFilter = call.argument<List<Int>>("recordingMethodsToFilter")!!
+    fun getData(call: MethodCall, result: Result, useGoogleFit: Boolean, context : Context?, threadPoolExecutor: ExecutorService? ) {
 
-        Log.i(
-            "FLUTTER_HEALTH",
-            "Getting data for $dataType with unit $dataUnit between $startTime and $endTime, filtering by $recordingMethodsToFilter"
-        )
+        if (context == null) {
+            result.success(false)
+            return
+        }
 
-        scope.launch {
-            try {
-                val grantedPermissions = healthConnectClient.permissionController.getGrantedPermissions()
+        if(useGoogleFit) {
+            if (threadPoolExecutor == null) {
+                result.success(false)
+                return
+            }
 
-                val authorizedTypeMap = HealthConstants.mapToType.filter { (typeKey, classType) ->
-                    val requiredPermission = HealthPermission.getReadPermission(classType)
-                    grantedPermissions.contains(requiredPermission)
-                }
+            val type = call.argument<String>("dataTypeKey")!!
+            val startTime = call.argument<Long>("startTime")!!
+            val endTime = call.argument<Long>("endTime")!!
+//            val includeManualEntry = call.argument<Boolean>("includeManualEntry")!!
+            // Look up data type and unit for the type key
+            val dataType = HealthConstants.keyToGoogleFitHealthDataType(type)
+            val field =HealthConstants.getGoogleFitField(type)
+            val typesBuilder = FitnessOptions.builder()
+            typesBuilder.addDataType(dataType)
 
-                authorizedTypeMap[dataType]?.let { classType ->
-                    val records = mutableListOf<Record>()
-
-                    // Set up the initial request to read health records
-                    var request = ReadRecordsRequest(
-                        recordType = classType,
-                        timeRangeFilter = TimeRangeFilter.between(startTime, endTime),
+            // Add special cases for accessing workouts or sleep data.
+            if (dataType == DataType.TYPE_SLEEP_SEGMENT) {
+                typesBuilder.accessSleepSessions(FitnessOptions.ACCESS_READ)
+            } else if (dataType == DataType.TYPE_ACTIVITY_SEGMENT) {
+                typesBuilder.accessActivitySessions(FitnessOptions.ACCESS_READ)
+                    .addDataType(
+                        DataType.TYPE_CALORIES_EXPENDED,
+                        FitnessOptions.ACCESS_READ
                     )
+                    .addDataType(
+                        DataType.TYPE_DISTANCE_DELTA,
+                        FitnessOptions.ACCESS_READ
+                    )
+            }
+            val fitnessOptions = typesBuilder.build()
+            val googleSignInAccount =
+                GoogleSignIn.getAccountForExtension(
+                    context.applicationContext,
+                    fitnessOptions
+                )
+            // Handle data types
+            when (dataType) {
+                else -> {
+                    Fitness.getHistoryClient(
+                        context.applicationContext,
+                        googleSignInAccount
+                    )
+                        .readData(
+                            DataReadRequest.Builder()
+                                .read(dataType)
+                                .setTimeRange(
+                                    startTime,
+                                    endTime,
+                                    TimeUnit.MILLISECONDS
+                                )
+                                .build(),
+                        )
+                        .addOnSuccessListener(
+                            threadPoolExecutor,
+                            googleFitDataHandler(
+                                dataType,
+                                field,
+                                true,
+                                result
+                            ),
+                        )
+                        .addOnFailureListener(
+                            OnFailureListener { exception ->
+                                Handler(context.mainLooper).run { result.success(null) }
+                                Log.e("FLUTTER_HEALTH::ERROR", "There was an error getting the data!: ${exception.message}")
+                            }
+                        )
+                }
+            }
+        }else {
+            val dataType = call.argument<String>("dataTypeKey")!!
+            val dataUnit: String? = call.argument<String>("dataUnitKey")
+            val startTime = Instant.ofEpochMilli(call.argument<Long>("startTime")!!)
+            val endTime = Instant.ofEpochMilli(call.argument<Long>("endTime")!!)
+            val healthConnectData = mutableListOf<Map<String, Any?>>()
+            val recordingMethodsToFilter = call.argument<List<Int>>("recordingMethodsToFilter")!!
 
-                    var response = healthConnectClient.readRecords(request)
-                    var pageToken = response.pageToken
+            Log.i(
+                "FLUTTER_HEALTH",
+                "Getting data for $dataType with unit $dataUnit between $startTime and $endTime, filtering by $recordingMethodsToFilter"
+            )
 
-                    // Add the records from the initial response
-                    records.addAll(response.records)
+            scope.launch {
+                try {
+                    val grantedPermissions =
+                        healthConnectClient.permissionController.getGrantedPermissions()
 
-                    // Continue making requests while there is a page token
-                    while (!pageToken.isNullOrEmpty()) {
-                        request = ReadRecordsRequest(
+                    val authorizedTypeMap =
+                        HealthConstants.mapToType.filter { (typeKey, classType) ->
+                            val requiredPermission = HealthPermission.getReadPermission(classType)
+                            grantedPermissions.contains(requiredPermission)
+                        }
+
+                    authorizedTypeMap[dataType]?.let { classType ->
+                        val records = mutableListOf<Record>()
+
+                        // Set up the initial request to read health records
+                        var request = ReadRecordsRequest(
                             recordType = classType,
                             timeRangeFilter = TimeRangeFilter.between(startTime, endTime),
-                            pageToken = pageToken
                         )
-                        response = healthConnectClient.readRecords(request)
-                        pageToken = response.pageToken
-                        records.addAll(response.records)
-                    }
 
-                    // Handle special cases
-                    when (dataType) {
-                        WORKOUT -> handleWorkoutData(records, recordingMethodsToFilter, healthConnectData)
-                        SLEEP_SESSION, SLEEP_ASLEEP, SLEEP_AWAKE, SLEEP_AWAKE_IN_BED, 
-                        SLEEP_LIGHT, SLEEP_DEEP, SLEEP_REM, SLEEP_OUT_OF_BED, SLEEP_UNKNOWN -> 
-                            handleSleepData(records, recordingMethodsToFilter, dataType, healthConnectData)
-                        else -> {
-                            val filteredRecords = recordingFilter.filterRecordsByRecordingMethods(
-                                recordingMethodsToFilter,
-                                records
+                        var response = healthConnectClient.readRecords(request)
+                        var pageToken = response.pageToken
+
+                        // Add the records from the initial response
+                        records.addAll(response.records)
+
+                        // Continue making requests while there is a page token
+                        while (!pageToken.isNullOrEmpty()) {
+                            request = ReadRecordsRequest(
+                                recordType = classType,
+                                timeRangeFilter = TimeRangeFilter.between(startTime, endTime),
+                                pageToken = pageToken
                             )
-                            for (rec in filteredRecords) {
-                                healthConnectData.addAll(
-                                    dataConverter.convertRecord(rec, dataType, dataUnit)
+                            response = healthConnectClient.readRecords(request)
+                            pageToken = response.pageToken
+                            records.addAll(response.records)
+                        }
+
+                        // Handle special cases
+                        when (dataType) {
+                            WORKOUT -> handleWorkoutData(
+                                records,
+                                recordingMethodsToFilter,
+                                healthConnectData
+                            )
+
+                            SLEEP_SESSION, SLEEP_ASLEEP, SLEEP_AWAKE, SLEEP_AWAKE_IN_BED,
+                            SLEEP_LIGHT, SLEEP_DEEP, SLEEP_REM, SLEEP_OUT_OF_BED, SLEEP_UNKNOWN ->
+                                handleSleepData(
+                                    records,
+                                    recordingMethodsToFilter,
+                                    dataType,
+                                    healthConnectData
                                 )
+
+                            else -> {
+                                val filteredRecords =
+                                    recordingFilter.filterRecordsByRecordingMethods(
+                                        recordingMethodsToFilter,
+                                        records
+                                    )
+                                for (rec in filteredRecords) {
+                                    healthConnectData.addAll(
+                                        dataConverter.convertRecord(rec, dataType, dataUnit)
+                                    )
+                                }
                             }
                         }
                     }
+                    Handler(context.mainLooper).run { result.success(healthConnectData) }
+                } catch (e: Exception) {
+                    Log.i(
+                        "FLUTTER_HEALTH::ERROR",
+                        "Unable to return $dataType due to the following exception:"
+                    )
+                    Log.e("FLUTTER_HEALTH::ERROR", Log.getStackTraceString(e))
+                    result.success(emptyList<Map<String, Any?>>()) // Return empty list instead of null
                 }
-                Handler(context.mainLooper).run { result.success(healthConnectData) }
-            } catch (e: Exception) {
-                Log.i(
-                    "FLUTTER_HEALTH::ERROR",
-                    "Unable to return $dataType due to the following exception:"
-                )
-                Log.e("FLUTTER_HEALTH::ERROR", Log.getStackTraceString(e))
-                result.success(emptyList<Map<String, Any?>>()) // Return empty list instead of null
             }
         }
     }
@@ -503,6 +611,75 @@ class HealthDataReader(
                     }
                 }
             }
+        }
+
+
+    }
+
+    private fun googleFitDataHandler(
+        dataType: DataType,
+        field: Field,
+        includeManualEntry: Boolean,
+        result: Result
+    ) = OnSuccessListener { response: DataReadResponse ->
+        // / Fetch all data points for the specified DataType
+        val dataSet = response.getDataSet(dataType)
+        /// For each data point, extract the contents and send them to Flutter, along with
+        // date and unit.
+        var dataPoints = dataSet.dataPoints
+        if (!includeManualEntry) {
+            dataPoints =
+                dataPoints.filterIndexed { _, dataPoint ->
+                    !dataPoint.originalDataSource.streamName.contains(
+                        "user_input"
+                    )
+                }
+        }
+        // For each data point, extract the contents and send them to Flutter, along with
+        // date and unit.
+        val healthData =
+            dataPoints.mapIndexed { _, dataPoint ->
+                return@mapIndexed hashMapOf(
+                    "value" to
+                            getGoogleFitHealthDataValue(
+                                dataPoint,
+                                field
+                            ),
+                    "date_from" to
+                            dataPoint.getStartTime(
+                                TimeUnit.MILLISECONDS
+                            ),
+                    "date_to" to
+                            dataPoint.getEndTime(
+                                TimeUnit.MILLISECONDS
+                            ),
+                    "source_name" to
+                            (dataPoint.originalDataSource
+                                .appPackageName
+                                ?: (dataPoint.originalDataSource
+                                    .device
+                                    ?.model
+                                    ?: "")),
+                    "source_id" to
+                            dataPoint.originalDataSource
+                                .streamIdentifier,
+                )
+            }
+        Handler(context.mainLooper).run { result.success(healthData) }
+    }
+
+    private fun getGoogleFitHealthDataValue(dataPoint: DataPoint, field: Field): Any {
+        val value = dataPoint.getValue(field)
+        // Conversion is needed because glucose is stored as mmoll in Google Fit;
+        // while mgdl is used for glucose in this plugin.
+        val isGlucose = field == HealthFields.FIELD_BLOOD_GLUCOSE_LEVEL
+        return when (value.format) {
+            Field.FORMAT_FLOAT ->
+                if (!isGlucose) value.asFloat()
+                else value.asFloat() * MMOLL_2_MGDL
+            Field.FORMAT_INT32 -> value.asInt()
+            Field.FORMAT_STRING -> value.asString()
+            else -> Log.e("Unsupported format:", value.format.toString())
         }
     }
 

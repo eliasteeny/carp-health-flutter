@@ -19,7 +19,8 @@ public class SwiftHealthPlugin: NSObject, FlutterPlugin {
     var workoutActivityTypeMap: [String: HKWorkoutActivityType] = [:]
     var characteristicsTypesDict: [String: HKCharacteristicType] = [:]
     var nutritionList: [String] = []
-    
+    var nutritionUnitDict : [HKQuantityTypeIdentifier: HKUnit] = [:]
+ 
     // Service classes
     private lazy var healthDataReader: HealthDataReader = {
         return HealthDataReader(
@@ -37,7 +38,8 @@ public class SwiftHealthPlugin: NSObject, FlutterPlugin {
             healthStore: healthStore,
             dataTypesDict: dataTypesDict,
             unitDict: unitDict,
-            workoutActivityTypeMap: workoutActivityTypeMap
+            workoutActivityTypeMap: workoutActivityTypeMap,
+            nutritionUnitDict: nutritionUnitDict
         )
     }()
     
@@ -119,6 +121,15 @@ public class SwiftHealthPlugin: NSObject, FlutterPlugin {
             } catch {
                 result(FlutterError(code: "WRITE_ERROR",
                                     message: "Error writing meal: \(error.localizedDescription)",
+                                    details: nil))
+            }
+        
+        case "deleteMeals":
+            do {
+                try healthDataOperations.deleteMeals(call: call, result: result)
+            } catch {
+                result(FlutterError(code: "DELETE_MEAL_ERROR",
+                                    message: "Error deleting meal: \(error.localizedDescription)",
                                     details: nil))
             }
             
@@ -276,6 +287,47 @@ public class SwiftHealthPlugin: NSObject, FlutterPlugin {
             HealthConstants.DIETARY_MOLYBDENUM,
             HealthConstants.DIETARY_SELENIUM,
         ]
+        
+        nutritionUnitDict[.dietaryCarbohydrates] = HKUnit.gram()
+        nutritionUnitDict[.dietaryEnergyConsumed] = HKUnit.kilocalorie()
+        nutritionUnitDict[.dietaryFatTotal] = HKUnit.gram()
+        nutritionUnitDict[.dietaryProtein] = HKUnit.gram()
+        nutritionUnitDict[.dietaryCaffeine] = HKUnit.gramUnit(with: .milli)
+        nutritionUnitDict[.dietaryCalcium] = HKUnit.gramUnit(with: .milli)
+        nutritionUnitDict[.dietaryCopper] = HKUnit.gramUnit(with: .milli)
+        nutritionUnitDict[.dietaryFatMonounsaturated] = HKUnit.gram()
+        nutritionUnitDict[.dietaryFatPolyunsaturated] = HKUnit.gram()
+        nutritionUnitDict[.dietaryFatSaturated] =  HKUnit.gram()
+        nutritionUnitDict[.dietaryFiber] = HKUnit.gram()
+        nutritionUnitDict[.dietaryFolate] = HKUnit.gramUnit(with: .micro)
+        nutritionUnitDict[.dietaryIron] = HKUnit.gramUnit(with: .milli)
+        nutritionUnitDict[.dietaryPotassium] = HKUnit.gramUnit(with: .milli)
+        nutritionUnitDict[.dietaryManganese] =  HKUnit.gramUnit(with: .milli)
+        nutritionUnitDict[.dietaryNiacin] =  HKUnit.gramUnit(with: .milli)
+        nutritionUnitDict[.dietaryPantothenicAcid] =  HKUnit.gramUnit(with: .milli)
+        nutritionUnitDict[.dietaryPhosphorus] =  HKUnit.gramUnit(with: .milli)
+        nutritionUnitDict[.dietaryPotassium] =  HKUnit.gramUnit(with: .milli)
+        nutritionUnitDict[.dietaryRiboflavin] =  HKUnit.gramUnit(with: .milli)
+        nutritionUnitDict[.dietarySelenium] = HKUnit.gramUnit(with: .micro)
+        nutritionUnitDict[.dietarySodium] = HKUnit.gramUnit(with: .milli)
+        nutritionUnitDict[.dietarySugar] = HKUnit.gram()
+        nutritionUnitDict[.dietaryThiamin] =  HKUnit.gramUnit(with: .milli)
+        nutritionUnitDict[.dietaryVitaminA] = HKUnit.gramUnit(with: .micro)
+        nutritionUnitDict[.dietaryVitaminB6] = HKUnit.gramUnit(with: .milli)
+        nutritionUnitDict[.dietaryVitaminB12] = HKUnit.gramUnit(with: .micro)
+        nutritionUnitDict[.dietaryVitaminC] = HKUnit.gramUnit(with: .milli)
+        nutritionUnitDict[.dietaryVitaminD] = HKUnit.gramUnit(with: .micro)
+        nutritionUnitDict[.dietaryVitaminE] = HKUnit.gramUnit(with: .milli)
+        nutritionUnitDict[.dietaryVitaminK] = HKUnit.gramUnit(with: .micro)
+        nutritionUnitDict[.dietaryZinc] = HKUnit.gramUnit(with: .milli)
+        nutritionUnitDict[.dietaryCholesterol] = HKUnit.gramUnit(with: .milli)
+        nutritionUnitDict[.dietaryWater] = HKUnit.literUnit(with: .milli)
+        nutritionUnitDict[.dietaryBiotin] = HKUnit.gram()
+        nutritionUnitDict[.dietaryChloride] = HKUnit.gram()
+        nutritionUnitDict[.dietaryChromium] = HKUnit.gram()
+        nutritionUnitDict[.dietaryIodine] = HKUnit.gram()
+        nutritionUnitDict[.dietaryMolybdenum] = HKUnit.gram()
+        nutritionUnitDict[.dietaryMagnesium] = HKUnit.gramUnit(with: .milli)
         
         // Set up iOS 11 specific types (ordinary health data quantity types)
         if #available(iOS 11.0, *) {

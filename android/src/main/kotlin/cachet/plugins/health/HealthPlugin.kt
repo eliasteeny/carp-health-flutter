@@ -3,6 +3,7 @@ package cachet.plugins.health
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Handler
 import android.util.Log
 import androidx.activity.ComponentActivity
@@ -11,6 +12,7 @@ import androidx.annotation.NonNull
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.PermissionController
 import androidx.health.connect.client.permission.HealthPermission
+import com.google.android.gms.auth.api.signin.GoogleSignIn
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
@@ -20,6 +22,13 @@ import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import io.flutter.plugin.common.MethodChannel.Result
 import io.flutter.plugin.common.PluginRegistry.ActivityResultListener
 import kotlinx.coroutines.*
+import java.time.Instant
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+
+const val GOOGLE_FIT_PERMISSIONS_REQUEST_CODE = 1111
+const val HEALTH_CONNECT_RESULT_CODE = 16969
+const val MMOLL_2_MGDL = 18.0 // 1 mmoll= 18 mgdl
 
 /**
  * Main Flutter plugin class for Health Connect integration. Manages plugin lifecycle, method
@@ -48,6 +57,9 @@ class HealthPlugin(private var channel: MethodChannel? = null) :
     private var healthConnectAvailable = false
     private var healthConnectStatus = HealthConnectClient.SDK_UNAVAILABLE
 
+    private var useGoogleFit = false
+    private var threadPoolExecutor: ExecutorService? = null
+
     companion object {
         const val CHANNEL_NAME = "flutter_health"
     }
@@ -66,7 +78,7 @@ class HealthPlugin(private var channel: MethodChannel? = null) :
         channel?.setMethodCallHandler(this)
         context = flutterPluginBinding.applicationContext
         handler = Handler(context!!.mainLooper)
-
+        threadPoolExecutor = Executors.newFixedThreadPool(4)
         checkAvailability()
         if (healthConnectAvailable) {
             healthConnectClient =
@@ -84,7 +96,10 @@ class HealthPlugin(private var channel: MethodChannel? = null) :
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         channel = null
         activity = null
+        threadPoolExecutor!!.shutdown()
+        threadPoolExecutor = null
         scope.cancel()
+
     }
 
     override fun success(p0: Any?) {
@@ -104,6 +119,15 @@ class HealthPlugin(private var channel: MethodChannel? = null) :
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?): Boolean {
+        if (requestCode == GOOGLE_FIT_PERMISSIONS_REQUEST_CODE) {
+            if (resultCode == Activity.RESULT_OK) {
+                Log.i("FLUTTER_HEALTH", "Access Granted!")
+                mResult?.success(true)
+            } else if (resultCode == Activity.RESULT_CANCELED) {
+                Log.i("FLUTTER_HEALTH", "Access Denied!")
+                mResult?.success(false)
+            }
+        }
         return false
     }
 
@@ -119,6 +143,7 @@ class HealthPlugin(private var channel: MethodChannel? = null) :
         when (call.method) {
             // SDK and Installation
             "installHealthConnect" -> installHealthConnect(call, result)
+            "useGoogleFit" -> useGoogleFit(call, result)
             "getHealthConnectSdkStatus" -> {
                 checkAvailability()
                 if (healthConnectAvailable && !(this::dataOperations.isInitialized)) {
@@ -129,9 +154,9 @@ class HealthPlugin(private var channel: MethodChannel? = null) :
             }
 
             // Permissions
-            "hasPermissions" -> dataOperations.hasPermissions(call, result)
+            "hasPermissions" -> dataOperations.hasPermissions(call, result, useGoogleFit, context)
             "requestAuthorization" -> requestAuthorization(call, result)
-            "revokePermissions" -> dataOperations.revokePermissions(call, result)
+            "revokePermissions" -> dataOperations.revokePermissions(call, result, useGoogleFit, context,activity )
 
             // History permissions
             "isHealthDataHistoryAvailable" ->
@@ -150,26 +175,28 @@ class HealthPlugin(private var channel: MethodChannel? = null) :
                     requestHealthDataInBackgroundAuthorization(call, result)
 
             // Reading data
-            "getData" -> dataReader.getData(call, result)
+            "getData" -> dataReader.getData(call, result, useGoogleFit, context, threadPoolExecutor )
             "getDataByUUID" -> dataReader.getDataByUUID(call, result)
             "getIntervalData" -> dataReader.getIntervalData(call, result)
             "getAggregateData" -> dataReader.getAggregateData(call, result)
             "getTotalStepsInInterval" -> dataReader.getTotalStepsInInterval(call, result)
 
             // Writing data
-            "writeData" -> dataWriter.writeData(call, result)
+            "writeData" -> dataWriter.writeData(call, result,useGoogleFit, context)
             "writeWorkoutData" -> dataWriter.writeWorkoutData(call, result)
             "writeBloodPressure" -> dataWriter.writeBloodPressure(call, result)
-            "writeBloodOxygen" -> dataWriter.writeBloodOxygen(call, result)
-            "writeMenstruationFlow" -> dataWriter.writeMenstruationFlow(call, result)
-            "writeMeal" -> dataWriter.writeMeal(call, result)
+            "writeBloodOxygen" -> dataWriter.writeBloodOxygen(call, result,useGoogleFit, context)
+            "writeMenstruationFlow" -> dataWriter.writeMenstruationFlow(call, result,useGoogleFit, context)
+            "writeMeal" -> dataWriter.writeMeal(call, result,useGoogleFit, context)
             // TODO: Add support for multiple speed for iOS as well
             // "writeMultipleSpeed" -> dataWriter.writeMultipleSpeedData(call, result)
 
             // Deleting data
-            "delete" -> dataOperations.deleteData(call, result)
+            "delete" -> dataOperations.deleteData(call, result, useGoogleFit, context)
+            "deleteMeals" -> dataOperations.deleteMeals(call, result, useGoogleFit, context)
             "deleteByUUID" -> dataOperations.deleteByUUID(call, result)
             "deleteByClientRecordId" -> dataOperations.deleteByClientRecordId(call, result)
+            "isGoogleFitAvailable" -> isGoogleFitAvailable(call, result)
             else -> result.notImplemented()
         }
     }
@@ -303,23 +330,51 @@ class HealthPlugin(private var channel: MethodChannel? = null) :
             return
         }
 
-        if (healthConnectRequestPermissionsLauncher == null) {
-            result.success(false)
-            Log.i("FLUTTER_HEALTH", "Permission launcher not found")
-            return
-        }
-
-        // Store the result to be called in onHealthConnectPermissionCallback
         mResult = result
-        isReplySubmitted = false
 
-        val permList = dataOperations.preparePermissionsList(call)
-        if (permList == null) {
-            result.success(false)
-            return
+        if(useGoogleFit){
+
+
+
+            val optionsToRegister =  HealthConstants.callToGoogleFitHealthTypes(call)
+
+            // Set to false due to bug described in
+            // https://github.com/cph-cachet/flutter-plugins/issues/640#issuecomment-1366830132
+            val isGranted = false
+
+            // If not granted then ask for permission
+            if (!isGranted && activity != null) {
+                GoogleSignIn.requestPermissions(
+                    activity!!,
+                    GOOGLE_FIT_PERMISSIONS_REQUEST_CODE,
+                    GoogleSignIn.getLastSignedInAccount(context!!),
+                    optionsToRegister,
+                )
+            } else { // / Permission already granted
+                result?.success(true)
+            }
+
+        }else {
+            if (healthConnectRequestPermissionsLauncher == null) {
+                result.success(false)
+                Log.i("FLUTTER_HEALTH", "Permission launcher not found")
+                return
+            }
+
+            // Store the result to be called in onHealthConnectPermissionCallback
+
+            isReplySubmitted = false
+
+            val permList = dataOperations.preparePermissionsList(call)
+            if (permList == null) {
+                result.success(false)
+                return
+            }
+
+            healthConnectRequestPermissionsLauncher!!.launch(permList.toSet())
         }
 
-        healthConnectRequestPermissionsLauncher!!.launch(permList.toSet())
+
     }
 
     /**
@@ -363,4 +418,31 @@ class HealthPlugin(private var channel: MethodChannel? = null) :
                 setOf(HealthPermission.PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND)
         )
     }
+
+    private fun useGoogleFit(call: MethodCall, result: Result) {
+
+        val status = call.argument<Boolean>("status")
+
+        if(status == null) {
+            Log.w("FLUTTER_HEALTH::ERROR", "Missing status for setting Google Fit")
+            result.success(false)
+            return;
+        }
+
+        useGoogleFit = status
+        result.success(null)
+    }
+
+   private  fun isGoogleFitAvailable(call: MethodCall, result: Result) {
+        try {
+            context!!.packageManager.getPackageInfo("com.google.android.apps.fitness", PackageManager.GET_ACTIVITIES)
+            result.success(true)
+
+        } catch (e: Exception) {
+            result.success(false)
+
+        }
+    }
+
+
 }

@@ -1,16 +1,31 @@
 package cachet.plugins.health
 
+import android.annotation.SuppressLint
+import android.content.Context
+import android.os.Handler
 import android.util.Log
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.records.*
 import androidx.health.connect.client.records.metadata.Device
 import androidx.health.connect.client.records.metadata.Metadata
 import androidx.health.connect.client.units.*
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.fitness.Fitness
+import com.google.android.gms.fitness.FitnessOptions
+import com.google.android.gms.fitness.data.DataPoint
+import com.google.android.gms.fitness.data.DataSet
+import com.google.android.gms.fitness.data.DataSource
+import com.google.android.gms.fitness.data.DataType
+import com.google.android.gms.fitness.data.Field
+import com.google.android.gms.fitness.data.HealthFields
+import com.google.android.gms.tasks.OnFailureListener
+import com.google.android.gms.fitness.data.Device as GoogleFitDevice
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel.Result
 import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import java.util.concurrent.TimeUnit
 
 /**
  * Handles writing health data to Health Connect. Manages data insertion for various health metrics,
@@ -89,6 +104,12 @@ class HealthDataWriter(
         }
     }
 
+    private fun isIntField(dataSource: DataSource, unit: Field): Boolean {
+        val dataPoint = DataPoint.builder(dataSource).build()
+        val value = dataPoint.getValue(unit)
+        return value.format == Field.FORMAT_INT32
+    }
+
 
     /**
      * Writes a single health data record to Health Connect. Supports most basic health metrics with
@@ -98,42 +119,140 @@ class HealthDataWriter(
      * 'recordingMethod'
      * @param result Flutter result callback returning boolean success status
      */
-    fun writeData(call: MethodCall, result: Result) {
-        val type = call.argument<String>("dataTypeKey")!!
-        val startTime = call.argument<Long>("startTime")!!
-        val endTime = call.argument<Long>("endTime")!!
-        val value = call.argument<Double>("value")!!
-        val clientRecordId: String? = call.argument("clientRecordId")
-        val clientRecordVersion: Double? = call.argument<Double>("clientRecordVersion")
-        val recordingMethod = call.argument<Int>("recordingMethod")!!
-        val deviceType: Int? = call.argument<Int>("deviceType")
+    fun writeData(call: MethodCall, result: Result,useGoogleFit: Boolean, context : Context?) {
 
-        Log.i(
+        if(useGoogleFit) {
+            if (context == null) {
+                result.success(false)
+                return
+            }
+
+            val type = call.argument<String>("dataTypeKey")!!
+            val startTime = call.argument<Long>("startTime")!!
+            val endTime = call.argument<Long>("endTime")!!
+            val value = call.argument<Float>("value")!!
+
+            // Look up data type and unit for the type key
+            val dataType = HealthConstants.keyToGoogleFitHealthDataType(type)
+            val field = HealthConstants.getGoogleFitField(type)
+
+            val typesBuilder = FitnessOptions.builder()
+            typesBuilder.addDataType(dataType, FitnessOptions.ACCESS_WRITE)
+
+            val dataSource =
+                DataSource.Builder()
+                    .setDataType(dataType)
+                    .setType(DataSource.TYPE_RAW)
+                    .setDevice(
+                        GoogleFitDevice.getLocalDevice(
+                            context.applicationContext
+                        )
+                    )
+                    .setAppPackageName(context.applicationContext)
+                    .build()
+
+            val builder =
+                if (startTime == endTime) {
+                    DataPoint.builder(dataSource)
+                        .setTimestamp(
+                            startTime,
+                            TimeUnit.MILLISECONDS
+                        )
+                } else {
+                    DataPoint.builder(dataSource)
+                        .setTimeInterval(
+                            startTime,
+                            endTime,
+                            TimeUnit.MILLISECONDS
+                        )
+                }
+
+            // Conversion is needed because glucose is stored as mmoll in Google Fit;
+            // while mgdl is used for glucose in this plugin.
+            val isGlucose = field == HealthFields.FIELD_BLOOD_GLUCOSE_LEVEL
+            val dataPoint =
+                if (!isIntField(dataSource, field)) {
+                    builder.setField(
+                        field,
+                        (if (!isGlucose) value
+                        else
+                            (value /
+                                    MMOLL_2_MGDL)
+                                .toFloat())
+                    )
+                        .build()
+                } else {
+                    builder.setField(field, value.toInt()).build()
+                }
+
+            val dataSet = DataSet.builder(dataSource).add(dataPoint).build()
+
+            if (dataType == DataType.TYPE_SLEEP_SEGMENT) {
+                typesBuilder.accessSleepSessions(FitnessOptions.ACCESS_READ)
+            }
+            val fitnessOptions = typesBuilder.build()
+            try {
+                val googleSignInAccount =
+                    GoogleSignIn.getAccountForExtension(
+                        context.applicationContext,
+                        fitnessOptions
+                    )
+                Fitness.getHistoryClient(context.applicationContext, googleSignInAccount)
+                    .insertData(dataSet)
+                    .addOnSuccessListener {
+                        Log.i(
+                            "FLUTTER_HEALTH::SUCCESS",
+                            "Dataset added successfully!"
+                        )
+                        result.success(true)
+                    }
+                    .addOnFailureListener(
+                        OnFailureListener { exception ->
+                            Handler(context.mainLooper).run { result.success(null) }
+                            Log.e("FLUTTER_HEALTH::ERROR", "Error writing data: ${exception.message}")
+                        }
+                    )
+            } catch (e3: Exception) {
+                result.success(false)
+            }
+        }else {
+
+            val type = call.argument<String>("dataTypeKey")!!
+            val startTime = call.argument<Long>("startTime")!!
+            val endTime = call.argument<Long>("endTime")!!
+            val value = call.argument<Double>("value")!!
+            val clientRecordId: String? = call.argument("clientRecordId")
+            val clientRecordVersion: Double? = call.argument<Double>("clientRecordVersion")
+            val recordingMethod = call.argument<Int>("recordingMethod")!!
+            val deviceType: Int? = call.argument<Int>("deviceType")
+
+            Log.i(
                 "FLUTTER_HEALTH",
                 "Writing data for $type between $startTime and $endTime, value: $value, recording method: $recordingMethod"
-        )
+            )
 
-        val metadata: Metadata = buildMetadata(
-            recordingMethod = recordingMethod,
-            clientRecordId = clientRecordId,
-            clientRecordVersion = clientRecordVersion?.toLong(),
-            deviceType = deviceType,
-        )
+            val metadata: Metadata = buildMetadata(
+                recordingMethod = recordingMethod,
+                clientRecordId = clientRecordId,
+                clientRecordVersion = clientRecordVersion?.toLong(),
+                deviceType = deviceType,
+            )
 
-        val record = createRecord(type, startTime, endTime, value, metadata)
+            val record = createRecord(type, startTime, endTime, value, metadata)
 
-        if (record == null) {
-            result.success(false)
-            return
-        }
-
-        scope.launch {
-            try {
-                healthConnectClient.insertRecords(listOf(record))
-                result.success(true)
-            } catch (e: Exception) {
-                Log.e("FLUTTER_HEALTH::ERROR", "Error writing $type: ${e.message}")
+            if (record == null) {
                 result.success(false)
+                return
+            }
+
+            scope.launch {
+                try {
+                    healthConnectClient.insertRecords(listOf(record))
+                    result.success(true)
+                } catch (e: Exception) {
+                    Log.e("FLUTTER_HEALTH::ERROR", "Error writing $type: ${e.message}")
+                    result.success(false)
+                }
             }
         }
     }
@@ -150,6 +269,7 @@ class HealthDataWriter(
      * ```
      * Flutter result callback returning boolean success status
      */
+    @SuppressLint("RestrictedApi")
     fun writeWorkoutData(call: MethodCall, result: Result) {
         val type = call.argument<String>("activityType")!!
         val startTime = Instant.ofEpochMilli(call.argument<Long>("startTime")!!)
@@ -288,8 +408,8 @@ class HealthDataWriter(
      * @param call Method call with blood oxygen data
      * @param result Flutter result callback returning success status
      */
-    fun writeBloodOxygen(call: MethodCall, result: Result) {
-        writeData(call, result)
+    fun writeBloodOxygen(call: MethodCall, result: Result, useGoogleFit: Boolean, context : Context?) {
+        writeData(call, result, useGoogleFit, context)
     }
 
     /**
@@ -299,8 +419,8 @@ class HealthDataWriter(
      * @param call Method call with menstruation flow data
      * @param result Flutter result callback returning success status
      */
-    fun writeMenstruationFlow(call: MethodCall, result: Result) {
-        writeData(call, result)
+    fun writeMenstruationFlow(call: MethodCall, result: Result,useGoogleFit: Boolean, context : Context?) {
+        writeData(call, result, useGoogleFit, context)
     }
 
     /**
@@ -315,130 +435,235 @@ class HealthDataWriter(
      * ```
      * Flutter result callback returning boolean success status
      */
-    fun writeMeal(call: MethodCall, result: Result) {
-        val startTime = Instant.ofEpochMilli(call.argument<Long>("start_time")!!)
-        val endTime = Instant.ofEpochMilli(call.argument<Long>("end_time")!!)
-        val calories = call.argument<Double>("calories")
-        val protein = call.argument<Double>("protein")
-        val carbs = call.argument<Double>("carbs")
-        val fat = call.argument<Double>("fat")
-        val caffeine = call.argument<Double>("caffeine")
-        val vitaminA = call.argument<Double>("vitamin_a")
-        val b1Thiamine = call.argument<Double>("b1_thiamine")
-        val b2Riboflavin = call.argument<Double>("b2_riboflavin")
-        val b3Niacin = call.argument<Double>("b3_niacin")
-        val b5PantothenicAcid = call.argument<Double>("b5_pantothenic_acid")
-        val b6Pyridoxine = call.argument<Double>("b6_pyridoxine")
-        val b7Biotin = call.argument<Double>("b7_biotin")
-        val b9Folate = call.argument<Double>("b9_folate")
-        val b12Cobalamin = call.argument<Double>("b12_cobalamin")
-        val vitaminC = call.argument<Double>("vitamin_c")
-        val vitaminD = call.argument<Double>("vitamin_d")
-        val vitaminE = call.argument<Double>("vitamin_e")
-        val vitaminK = call.argument<Double>("vitamin_k")
-        val calcium = call.argument<Double>("calcium")
-        val chloride = call.argument<Double>("chloride")
-        val cholesterol = call.argument<Double>("cholesterol")
-        val chromium = call.argument<Double>("chromium")
-        val copper = call.argument<Double>("copper")
-        val fatUnsaturated = call.argument<Double>("fat_unsaturated")
-        val fatMonounsaturated = call.argument<Double>("fat_monounsaturated")
-        val fatPolyunsaturated = call.argument<Double>("fat_polyunsaturated")
-        val fatSaturated = call.argument<Double>("fat_saturated")
-        val fatTransMonoenoic = call.argument<Double>("fat_trans_monoenoic")
-        val fiber = call.argument<Double>("fiber")
-        val iodine = call.argument<Double>("iodine")
-        val iron = call.argument<Double>("iron")
-        val magnesium = call.argument<Double>("magnesium")
-        val manganese = call.argument<Double>("manganese")
-        val molybdenum = call.argument<Double>("molybdenum")
-        val phosphorus = call.argument<Double>("phosphorus")
-        val potassium = call.argument<Double>("potassium")
-        val selenium = call.argument<Double>("selenium")
-        val sodium = call.argument<Double>("sodium")
-        val sugar = call.argument<Double>("sugar")
-        val zinc = call.argument<Double>("zinc")
+    fun writeMeal(call: MethodCall, result: Result, useGoogleFit: Boolean, context : Context?) {
+        if(useGoogleFit) {
+            if (context == null) {
+                result.success(false)
+                return
+            }
 
-        val name = call.argument<String>("name")
-        val mealType = call.argument<String>("meal_type")!!
-        val recordingMethod = call.argument<Int>("recordingMethod") ?: RECORDING_METHOD_MANUAL_ENTRY
-        val clientRecordId: String? = call.argument<String>("clientRecordId")
-        val clientRecordVersion: Double? = call.argument<Double>("clientRecordVersion")
-        val deviceType: Int? = call.argument<Int>("deviceType")
+            val startTime = call.argument<Long>("start_time")!!
+            val endTime = call.argument<Long>("end_time")!!
+            val calories = call.argument<Double>("calories")
+            val carbs = call.argument<Double>("carbs") as Double?
+            val protein = call.argument<Double>("protein") as Double?
+            val fat = call.argument<Double>("fat") as Double?
 
-        scope.launch {
+
+            val name = call.argument<String>("name")
+            val mealType = call.argument<String>("meal_type")!!
+
+            val dataType = DataType.TYPE_NUTRITION
+
+            val typesBuilder = FitnessOptions.builder()
+            typesBuilder.addDataType(dataType, FitnessOptions.ACCESS_WRITE)
+
+            val dataSource =
+                DataSource.Builder()
+                    .setDataType(dataType)
+                    .setType(DataSource.TYPE_RAW)
+                    .setDevice(
+                        GoogleFitDevice.getLocalDevice(
+                            context.applicationContext
+                        )
+                    )
+                    .setAppPackageName(context.applicationContext)
+                    .build()
+
+            val nutrients = mutableMapOf(Field.NUTRIENT_CALORIES to calories?.toFloat())
+
+            if (carbs != null) {
+                nutrients[Field.NUTRIENT_TOTAL_CARBS] = carbs.toFloat()
+            }
+
+            if (protein != null) {
+                nutrients[Field.NUTRIENT_PROTEIN] = protein.toFloat()
+            }
+
+            if (fat != null) {
+                nutrients[Field.NUTRIENT_TOTAL_FAT] = fat.toFloat()
+            }
+
+            val dataBuilder =
+                DataPoint.builder(dataSource)
+                    .setTimeInterval(
+                        startTime,
+                        endTime,
+                        TimeUnit.MILLISECONDS
+                    )
+                    .setField(
+                        Field.FIELD_NUTRIENTS,
+                        // Remove null values
+                        nutrients.filterValues { it != null }.toMutableMap(),
+                    )
+
+            if (name != null) {
+                dataBuilder.setField(Field.FIELD_FOOD_ITEM, name as String)
+            }
+
+            dataBuilder.setField(
+                Field.FIELD_MEAL_TYPE,
+                HealthConstants.MapMealTypeToGoogleFitType[mealType] ?: Field.MEAL_TYPE_UNKNOWN
+            )
+
+            val dataPoint = dataBuilder.build()
+
+            val dataSet = DataSet.builder(dataSource).add(dataPoint).build()
+
+            val fitnessOptions = typesBuilder.build()
             try {
-                val metadata: Metadata = buildMetadata(
-                    recordingMethod = recordingMethod,
-                    clientRecordId = clientRecordId,
-                    clientRecordVersion = clientRecordVersion?.toLong(),
-                    deviceType = deviceType,
-                )
-                val list = mutableListOf<Record>()
+                val googleSignInAccount =
+                    GoogleSignIn.getAccountForExtension(
+                        context.applicationContext,
+                        fitnessOptions
+                    )
+                Fitness.getHistoryClient(context.applicationContext, googleSignInAccount)
+                    .insertData(dataSet)
+                    .addOnSuccessListener {
+                        Log.i(
+                            "FLUTTER_HEALTH::SUCCESS",
+                            "Meal added successfully!"
+                        )
+                        result.success(true)
+                    }
+                    .addOnFailureListener(
+                        OnFailureListener { exception ->
+                            Handler(context.mainLooper).run { result.success(null) }
+                            Log.e("FLUTTER_HEALTH::ERROR", "Error writing meal: ${exception.message}")
+                        }
+                    )
+            } catch (e3: Exception) {
+                result.success(false)
+            }
+        } else {
+            val startTime = Instant.ofEpochMilli(call.argument<Long>("start_time")!!)
+            val endTime = Instant.ofEpochMilli(call.argument<Long>("end_time")!!)
+            val calories = call.argument<Double>("calories")
+            val protein = call.argument<Double>("protein")
+            val carbs = call.argument<Double>("carbs")
+            val fat = call.argument<Double>("fat")
+            val caffeine = call.argument<Double>("caffeine")
+            val vitaminA = call.argument<Double>("vitamin_a")
+            val b1Thiamine = call.argument<Double>("b1_thiamine")
+            val b2Riboflavin = call.argument<Double>("b2_riboflavin")
+            val b3Niacin = call.argument<Double>("b3_niacin")
+            val b5PantothenicAcid = call.argument<Double>("b5_pantothenic_acid")
+            val b6Pyridoxine = call.argument<Double>("b6_pyridoxine")
+            val b7Biotin = call.argument<Double>("b7_biotin")
+            val b9Folate = call.argument<Double>("b9_folate")
+            val b12Cobalamin = call.argument<Double>("b12_cobalamin")
+            val vitaminC = call.argument<Double>("vitamin_c")
+            val vitaminD = call.argument<Double>("vitamin_d")
+            val vitaminE = call.argument<Double>("vitamin_e")
+            val vitaminK = call.argument<Double>("vitamin_k")
+            val calcium = call.argument<Double>("calcium")
+            val chloride = call.argument<Double>("chloride")
+            val cholesterol = call.argument<Double>("cholesterol")
+            val chromium = call.argument<Double>("chromium")
+            val copper = call.argument<Double>("copper")
+            val fatUnsaturated = call.argument<Double>("fat_unsaturated")
+            val fatMonounsaturated = call.argument<Double>("fat_monounsaturated")
+            val fatPolyunsaturated = call.argument<Double>("fat_polyunsaturated")
+            val fatSaturated = call.argument<Double>("fat_saturated")
+            val fatTransMonoenoic = call.argument<Double>("fat_trans_monoenoic")
+            val fiber = call.argument<Double>("fiber")
+            val iodine = call.argument<Double>("iodine")
+            val iron = call.argument<Double>("iron")
+            val magnesium = call.argument<Double>("magnesium")
+            val manganese = call.argument<Double>("manganese")
+            val molybdenum = call.argument<Double>("molybdenum")
+            val phosphorus = call.argument<Double>("phosphorus")
+            val potassium = call.argument<Double>("potassium")
+            val selenium = call.argument<Double>("selenium")
+            val sodium = call.argument<Double>("sodium")
+            val sugar = call.argument<Double>("sugar")
+            val zinc = call.argument<Double>("zinc")
 
-                list.add(
+            val name = call.argument<String>("name")
+            val mealType = call.argument<String>("meal_type")!!
+            val recordingMethod =
+                call.argument<Int>("recordingMethod") ?: RECORDING_METHOD_MANUAL_ENTRY
+            val clientRecordId: String? = call.argument<String>("clientRecordId")
+            val clientRecordVersion: Double? = call.argument<Double>("clientRecordVersion")
+            val deviceType: Int? = call.argument<Int>("deviceType")
+
+            scope.launch {
+                try {
+                    val metadata: Metadata = buildMetadata(
+                        recordingMethod = recordingMethod,
+                        clientRecordId = clientRecordId,
+                        clientRecordVersion = clientRecordVersion?.toLong(),
+                        deviceType = deviceType,
+                    )
+                    val list = mutableListOf<Record>()
+
+                    list.add(
                         NutritionRecord(
-                                name = name,
-                                metadata = metadata,
-                                energy = calories?.kilocalories,
-                                totalCarbohydrate = carbs?.grams,
-                                protein = protein?.grams,
-                                totalFat = fat?.grams,
-                                caffeine = caffeine?.grams,
-                                vitaminA = vitaminA?.grams,
-                                thiamin = b1Thiamine?.grams,
-                                riboflavin = b2Riboflavin?.grams,
-                                niacin = b3Niacin?.grams,
-                                pantothenicAcid = b5PantothenicAcid?.grams,
-                                vitaminB6 = b6Pyridoxine?.grams,
-                                biotin = b7Biotin?.grams,
-                                folate = b9Folate?.grams,
-                                vitaminB12 = b12Cobalamin?.grams,
-                                vitaminC = vitaminC?.grams,
-                                vitaminD = vitaminD?.grams,
-                                vitaminE = vitaminE?.grams,
-                                vitaminK = vitaminK?.grams,
-                                calcium = calcium?.grams,
-                                chloride = chloride?.grams,
-                                cholesterol = cholesterol?.grams,
-                                chromium = chromium?.grams,
-                                copper = copper?.grams,
-                                unsaturatedFat = fatUnsaturated?.grams,
-                                monounsaturatedFat = fatMonounsaturated?.grams,
-                                polyunsaturatedFat = fatPolyunsaturated?.grams,
-                                saturatedFat = fatSaturated?.grams,
-                                transFat = fatTransMonoenoic?.grams,
-                                dietaryFiber = fiber?.grams,
-                                iodine = iodine?.grams,
-                                iron = iron?.grams,
-                                magnesium = magnesium?.grams,
-                                manganese = manganese?.grams,
-                                molybdenum = molybdenum?.grams,
-                                phosphorus = phosphorus?.grams,
-                                potassium = potassium?.grams,
-                                selenium = selenium?.grams,
-                                sodium = sodium?.grams,
-                                sugar = sugar?.grams,
-                                zinc = zinc?.grams,
-                                startTime = startTime,
-                                startZoneOffset = null,
-                                endTime = endTime,
-                                endZoneOffset = null,
-                                mealType = HealthConstants.mapMealTypeToType[mealType]
-                                                ?: MealType.MEAL_TYPE_UNKNOWN
+                            name = name,
+                            metadata = metadata,
+                            energy = calories?.kilocalories,
+                            totalCarbohydrate = carbs?.grams,
+                            protein = protein?.grams,
+                            totalFat = fat?.grams,
+                            caffeine = caffeine?.milligrams,
+                            vitaminA = vitaminA?.micrograms,
+                            thiamin = b1Thiamine?.milligrams,
+                            riboflavin = b2Riboflavin?.milligrams,
+                            niacin = b3Niacin?.milligrams,
+                            pantothenicAcid = b5PantothenicAcid?.milligrams,
+                            vitaminB6 = b6Pyridoxine?.milligrams,
+                            biotin = b7Biotin?.grams,
+                            folate = b9Folate?.micrograms,
+                            vitaminB12 = b12Cobalamin?.micrograms,
+                            vitaminC = vitaminC?.milligrams,
+                            vitaminD = vitaminD?.micrograms,
+                            vitaminE = vitaminE?.milligrams,
+                            vitaminK = vitaminK?.micrograms,
+                            calcium = calcium?.milligrams,
+                            chloride = chloride?.grams,
+                            cholesterol = cholesterol?.milligrams,
+                            chromium = chromium?.grams,
+                            copper = copper?.milligrams,
+                            unsaturatedFat = fatUnsaturated?.grams,
+                            monounsaturatedFat = fatMonounsaturated?.grams,
+                            polyunsaturatedFat = fatPolyunsaturated?.grams,
+                            saturatedFat = fatSaturated?.grams,
+                            transFat = fatTransMonoenoic?.grams,
+                            dietaryFiber = fiber?.grams,
+                            iodine = iodine?.grams,
+                            iron = iron?.milligrams,
+                            magnesium = magnesium?.milligrams,
+                            manganese = manganese?.milligrams,
+                            molybdenum = molybdenum?.grams,
+                            phosphorus = phosphorus?.milligrams,
+                            potassium = potassium?.milligrams,
+                            selenium = selenium?.micrograms,
+                            sodium = sodium?.milligrams,
+                            sugar = sugar?.grams,
+                            zinc = zinc?.milligrams,
+                            startTime = startTime,
+                            startZoneOffset = null,
+                            endTime = endTime,
+                            endZoneOffset = null,
+                            mealType = HealthConstants.mapMealTypeToType[mealType]
+                                ?: MealType.MEAL_TYPE_UNKNOWN
                         ),
-                )
-                healthConnectClient.insertRecords(list)
-                result.success(true)
-                Log.i("FLUTTER_HEALTH::SUCCESS", "[Health Connect] Meal was successfully added!")
-            } catch (e: Exception) {
-                Log.w(
+                    )
+                    healthConnectClient.insertRecords(list)
+                    result.success(true)
+                    Log.i(
+                        "FLUTTER_HEALTH::SUCCESS",
+                        "[Health Connect] Meal was successfully added!"
+                    )
+                } catch (e: Exception) {
+                    Log.w(
                         "FLUTTER_HEALTH::ERROR",
                         "[Health Connect] There was an error adding the meal",
-                )
-                Log.w("FLUTTER_HEALTH::ERROR", e.message ?: "unknown error")
-                Log.w("FLUTTER_HEALTH::ERROR", e.stackTrace.toString())
-                result.success(false)
+                    )
+                    Log.w("FLUTTER_HEALTH::ERROR", e.message ?: "unknown error")
+                    Log.w("FLUTTER_HEALTH::ERROR", e.stackTrace.toString())
+                    result.success(false)
+                }
             }
         }
     }

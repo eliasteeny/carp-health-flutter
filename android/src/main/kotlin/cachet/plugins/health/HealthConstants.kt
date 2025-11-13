@@ -1,8 +1,17 @@
 package cachet.plugins.health
 
+import android.content.Context
+import android.os.Handler
 import kotlin.reflect.KClass
 import androidx.health.connect.client.records.*
 import androidx.health.connect.client.records.MealType
+import com.google.android.gms.fitness.FitnessOptions
+import com.google.android.gms.fitness.data.DataType
+import com.google.android.gms.fitness.data.Field
+import com.google.android.gms.fitness.data.HealthDataTypes
+import com.google.android.gms.fitness.data.HealthFields
+import com.google.android.gms.tasks.OnFailureListener
+import io.flutter.plugin.common.MethodCall
 
 /**
  * Contains all data type mappings, health record classifications, and type conversions
@@ -238,4 +247,157 @@ object HealthConstants {
         "YOGA" to ExerciseSessionRecord.EXERCISE_TYPE_YOGA,
         "OTHER" to ExerciseSessionRecord.EXERCISE_TYPE_OTHER_WORKOUT,
     )
+
+     fun keyToGoogleFitHealthDataType(type: String): DataType {
+        return when (type) {
+            BODY_FAT_PERCENTAGE -> DataType.TYPE_BODY_FAT_PERCENTAGE
+            HEIGHT -> DataType.TYPE_HEIGHT
+            WEIGHT -> DataType.TYPE_WEIGHT
+            STEPS -> DataType.TYPE_STEP_COUNT_DELTA
+            AGGREGATE_STEP_COUNT -> DataType.AGGREGATE_STEP_COUNT_DELTA
+            ACTIVE_ENERGY_BURNED -> DataType.TYPE_CALORIES_EXPENDED
+            HEART_RATE -> DataType.TYPE_HEART_RATE_BPM
+            BODY_TEMPERATURE -> HealthDataTypes.TYPE_BODY_TEMPERATURE
+            BLOOD_PRESSURE_SYSTOLIC -> HealthDataTypes.TYPE_BLOOD_PRESSURE
+            BLOOD_PRESSURE_DIASTOLIC -> HealthDataTypes.TYPE_BLOOD_PRESSURE
+            BLOOD_OXYGEN -> HealthDataTypes.TYPE_OXYGEN_SATURATION
+            BLOOD_GLUCOSE -> HealthDataTypes.TYPE_BLOOD_GLUCOSE
+            DISTANCE_DELTA -> DataType.TYPE_DISTANCE_DELTA
+            WATER -> DataType.TYPE_HYDRATION
+            SLEEP_ASLEEP -> DataType.TYPE_SLEEP_SEGMENT
+            SLEEP_AWAKE -> DataType.TYPE_SLEEP_SEGMENT
+            SLEEP_IN_BED -> DataType.TYPE_SLEEP_SEGMENT
+            SLEEP_LIGHT -> DataType.TYPE_SLEEP_SEGMENT
+            SLEEP_REM -> DataType.TYPE_SLEEP_SEGMENT
+            SLEEP_DEEP -> DataType.TYPE_SLEEP_SEGMENT
+            WORKOUT -> DataType.TYPE_ACTIVITY_SEGMENT
+            NUTRITION -> DataType.TYPE_NUTRITION
+            else -> throw IllegalArgumentException("Unsupported dataType: $type")
+        }
+    }
+
+     fun getGoogleFitField(type: String): Field {
+        return when (type) {
+            BODY_FAT_PERCENTAGE -> Field.FIELD_PERCENTAGE
+            HEIGHT -> Field.FIELD_HEIGHT
+            WEIGHT -> Field.FIELD_WEIGHT
+            STEPS -> Field.FIELD_STEPS
+            ACTIVE_ENERGY_BURNED -> Field.FIELD_CALORIES
+            HEART_RATE -> Field.FIELD_BPM
+            BODY_TEMPERATURE -> HealthFields.FIELD_BODY_TEMPERATURE
+            BLOOD_PRESSURE_SYSTOLIC -> HealthFields.FIELD_BLOOD_PRESSURE_SYSTOLIC
+            BLOOD_PRESSURE_DIASTOLIC -> HealthFields.FIELD_BLOOD_PRESSURE_DIASTOLIC
+            BLOOD_OXYGEN -> HealthFields.FIELD_OXYGEN_SATURATION
+            BLOOD_GLUCOSE -> HealthFields.FIELD_BLOOD_GLUCOSE_LEVEL
+            DISTANCE_DELTA -> Field.FIELD_DISTANCE
+            WATER -> Field.FIELD_VOLUME
+            SLEEP_ASLEEP -> Field.FIELD_SLEEP_SEGMENT_TYPE
+            SLEEP_AWAKE -> Field.FIELD_SLEEP_SEGMENT_TYPE
+            SLEEP_IN_BED -> Field.FIELD_SLEEP_SEGMENT_TYPE
+            SLEEP_LIGHT -> Field.FIELD_SLEEP_SEGMENT_TYPE
+            SLEEP_REM -> Field.FIELD_SLEEP_SEGMENT_TYPE
+            SLEEP_DEEP -> Field.FIELD_SLEEP_SEGMENT_TYPE
+            WORKOUT -> Field.FIELD_ACTIVITY
+            NUTRITION -> Field.FIELD_NUTRIENTS
+            else -> throw IllegalArgumentException("Unsupported dataType: $type")
+        }
+    }
+
+     val MapMealTypeToGoogleFitType =
+        hashMapOf<String, Int>(
+            BREAKFAST to Field.MEAL_TYPE_BREAKFAST,
+            LUNCH to Field.MEAL_TYPE_LUNCH,
+            DINNER to Field.MEAL_TYPE_DINNER,
+            SNACK to Field.MEAL_TYPE_SNACK,
+            MEAL_UNKNOWN to Field.MEAL_TYPE_UNKNOWN,
+        )
+
+
+     fun callToGoogleFitHealthTypes(call: MethodCall): FitnessOptions {
+        val typesBuilder = FitnessOptions.builder()
+        val args = call.arguments as HashMap<*, *>
+        val types = (args["types"] as? ArrayList<*>)?.filterIsInstance<String>()
+        val permissions = (args["permissions"] as? ArrayList<*>)?.filterIsInstance<Int>()
+
+        assert(types != null)
+        assert(permissions != null)
+        assert(types!!.count() == permissions!!.count())
+
+        for ((i, typeKey) in types.withIndex()) {
+            val access = permissions[i]
+            val dataType = keyToGoogleFitHealthDataType(typeKey)
+            when (access) {
+                0 -> typesBuilder.addDataType(dataType, FitnessOptions.ACCESS_READ)
+                1 -> typesBuilder.addDataType(dataType, FitnessOptions.ACCESS_WRITE)
+                2 -> {
+                    typesBuilder.addDataType(
+                        dataType,
+                        FitnessOptions.ACCESS_READ
+                    )
+                    typesBuilder.addDataType(
+                        dataType,
+                        FitnessOptions.ACCESS_WRITE
+                    )
+                }
+                else ->
+                    throw IllegalArgumentException(
+                        "Unknown access type $access"
+                    )
+            }
+            if (typeKey == SLEEP_ASLEEP ||
+                typeKey == SLEEP_AWAKE ||
+                typeKey == SLEEP_IN_BED
+            ) {
+                typesBuilder.accessSleepSessions(FitnessOptions.ACCESS_READ)
+                when (access) {
+                    0 ->
+                        typesBuilder.accessSleepSessions(
+                            FitnessOptions.ACCESS_READ
+                        )
+                    1 ->
+                        typesBuilder.accessSleepSessions(
+                            FitnessOptions.ACCESS_WRITE
+                        )
+                    2 -> {
+                        typesBuilder.accessSleepSessions(
+                            FitnessOptions.ACCESS_READ
+                        )
+                        typesBuilder.accessSleepSessions(
+                            FitnessOptions.ACCESS_WRITE
+                        )
+                    }
+                    else ->
+                        throw IllegalArgumentException(
+                            "Unknown access type $access"
+                        )
+                }
+            }
+            if (typeKey == WORKOUT) {
+                when (access) {
+                    0 ->
+                        typesBuilder.accessActivitySessions(
+                            FitnessOptions.ACCESS_READ
+                        )
+                    1 ->
+                        typesBuilder.accessActivitySessions(
+                            FitnessOptions.ACCESS_WRITE
+                        )
+                    2 -> {
+                        typesBuilder.accessActivitySessions(
+                            FitnessOptions.ACCESS_READ
+                        )
+                        typesBuilder.accessActivitySessions(
+                            FitnessOptions.ACCESS_WRITE
+                        )
+                    }
+                    else ->
+                        throw IllegalArgumentException(
+                            "Unknown access type $access"
+                        )
+                }
+            }
+        }
+        return typesBuilder.build()
+    }
+
 }

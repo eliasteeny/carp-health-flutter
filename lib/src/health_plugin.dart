@@ -170,6 +170,39 @@ class Health {
     }
   }
 
+  /// Check if Google Fit on Android is available
+  /// Always returns true on iOS
+  Future<bool> isGoogleFitAvailable() async {
+    if (Platform.isIOS) {
+      return true;
+    }
+     try {
+      return await _channel.invokeMethod<bool>('isGoogleFitAvailable') ?? false;
+    } catch (e) {
+      debugPrint('$runtimeType - Exception in isGoogleFitAvailable(): $e');
+      return false;
+    }
+  }
+
+  /// Pass true to use Google Fit or false to use Health Connect
+  /// Always returns true on iOS
+  Future<void> useGoogleFit(bool useGoogleFit) async {
+    if (Platform.isIOS) {
+      return;
+    }
+
+    try {
+      Map<String, dynamic> args = {
+        'status': useGoogleFit,
+      };
+      await _channel.invokeMethod<bool>('useGoogleFit', args);
+    } catch (e) {
+      debugPrint('$runtimeType - Exception in useGoogleFit(): $e');
+      return;
+    }
+  }
+  
+
   /// Is Google Health Connect available on this phone?
   ///
   /// Android only. Returns always true on iOS.
@@ -610,6 +643,33 @@ class Health {
       'endTime': endTime.millisecondsSinceEpoch,
     };
     bool? success = await _channel.invokeMethod('delete', args);
+    return success ?? false;
+  }
+
+  /// Deletes all meal related records of the given period of time.
+  ///
+  /// Returns true if successful, false otherwise.
+  ///
+  /// Parameters:
+  ///  * [startTime] - the start time when this [value] is measured.
+  ///    Must be equal to or earlier than [endTime].
+  ///  * [endTime] - the end time when this [value] is measured.
+  ///    Must be equal to or later than [startTime].
+  Future<bool> deleteMeals({
+    required DateTime startTime,
+    DateTime? endTime,
+  }) async {
+    await _checkIfHealthConnectAvailableOnAndroid();
+    endTime ??= startTime;
+    if (startTime.isAfter(endTime)) {
+      throw ArgumentError("startTime must be equal or earlier than endTime");
+    }
+
+    Map<String, dynamic> args = {
+      'startTime': startTime.millisecondsSinceEpoch,
+      'endTime': endTime.millisecondsSinceEpoch,
+    };
+    bool? success = await _channel.invokeMethod('deleteMeals', args);
     return success ?? false;
   }
 
@@ -1477,7 +1537,7 @@ class Health {
     HealthDataType.HEADACHE_SEVERE => 4,
     _ => throw HealthException(
       type,
-      "HealthDataType was not aligned correctly - please report bug at https://github.com/carp-dk/carp-health-flutter/issues",
+      "HealthDataType was not aligned correctly - please report bug at https://github.com/cph-cachet/flutter-plugins/issues",
     ),
   };
 

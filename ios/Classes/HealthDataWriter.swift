@@ -7,6 +7,7 @@ class HealthDataWriter {
     let dataTypesDict: [String: HKSampleType]
     let unitDict: [String: HKUnit]
     let workoutActivityTypeMap: [String: HKWorkoutActivityType]
+    let nutritionUnitDict: [HKQuantityTypeIdentifier: HKUnit]
 
     /// - Parameters:
     ///   - healthStore: The HealthKit store
@@ -15,12 +16,14 @@ class HealthDataWriter {
     ///   - workoutActivityTypeMap: Dictionary of workout activity types
     init(
         healthStore: HKHealthStore, dataTypesDict: [String: HKSampleType],
-        unitDict: [String: HKUnit], workoutActivityTypeMap: [String: HKWorkoutActivityType]
+        unitDict: [String: HKUnit], workoutActivityTypeMap: [String: HKWorkoutActivityType],
+        nutritionUnitDict:[HKQuantityTypeIdentifier: HKUnit]
     ) {
         self.healthStore = healthStore
         self.dataTypesDict = dataTypesDict
         self.unitDict = unitDict
         self.workoutActivityTypeMap = workoutActivityTypeMap
+        self.nutritionUnitDict = nutritionUnitDict
     }
 
     /// Writes general health data
@@ -220,10 +223,7 @@ class HealthDataWriter {
         for (key, identifier) in HealthConstants.NUTRITION_KEYS {
             let value = arguments[key] as? Double
             guard let unwrappedValue = value else { continue }
-            let unit =
-                key == "calories"
-                ? HKUnit.kilocalorie()
-                : key == "water" ? HKUnit.literUnit(with: .milli) : HKUnit.gram()
+            let unit = unitLookUp(key: identifier)
             let nutritionSample = HKQuantitySample(
                 type: HKSampleType.quantityType(forIdentifier: identifier)!,
                 quantity: HKQuantity(unit: unit, doubleValue: unwrappedValue), start: dateFrom,
@@ -437,4 +437,11 @@ class HealthDataWriter {
                 }
             })
     }
+    
+    func unitLookUp(key: HKQuantityTypeIdentifier) -> HKUnit {
+            guard let unit = nutritionUnitDict[key] else {
+                return HKUnit.count()
+            }
+            return unit
+        }
 }
