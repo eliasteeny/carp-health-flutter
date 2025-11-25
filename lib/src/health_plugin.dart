@@ -448,6 +448,56 @@ class Health {
     return isAuthorized ?? false;
   }
 
+  /// Only on Anrdroid: forces auth request
+  Future<bool> forceRequestAuthorization(
+    List<HealthDataType> types, {
+    List<HealthDataAccess>? permissions,
+  }) async {
+    await _checkIfHealthConnectAvailableOnAndroid();
+    if (permissions != null && permissions.length != types.length) {
+      throw ArgumentError(
+        'The length of [types] must be same as that of [permissions].',
+      );
+    }
+
+    if (permissions != null) {
+      for (int i = 0; i < types.length; i++) {
+        final type = types[i];
+        final permission = permissions[i];
+        if ((type == HealthDataType.ELECTROCARDIOGRAM ||
+                type == HealthDataType.HIGH_HEART_RATE_EVENT ||
+                type == HealthDataType.LOW_HEART_RATE_EVENT ||
+                type == HealthDataType.IRREGULAR_HEART_RATE_EVENT ||
+                type == HealthDataType.WALKING_HEART_RATE ||
+                type == HealthDataType.ATRIAL_FIBRILLATION_BURDEN) &&
+            permission != HealthDataAccess.READ) {
+          throw ArgumentError(
+            'Requesting WRITE permission on ELECTROCARDIOGRAM / HIGH_HEART_RATE_EVENT / LOW_HEART_RATE_EVENT / IRREGULAR_HEART_RATE_EVENT / WALKING_HEART_RATE / ATRIAL_FIBRILLATION_BURDEN is not allowed.',
+          );
+        }
+      }
+    }
+
+    final mTypes = List<HealthDataType>.from(types, growable: true);
+    final mPermissions = permissions == null
+        ? List<int>.filled(
+            types.length,
+            HealthDataAccess.READ.index,
+            growable: true,
+          )
+        : permissions.map((permission) => permission.index).toList();
+
+    // on Android, if BMI is requested, then also ask for weight and height
+    if (Platform.isAndroid) _handleBMI(mTypes, mPermissions);
+
+    List<String> keys = mTypes.map((e) => e.name).toList();
+    final bool? isAuthorized = await _channel.invokeMethod(
+      'forceRequestAuthorization',
+      {'types': keys, "permissions": mPermissions},
+    );
+    return isAuthorized ?? false;
+  }
+
   /// Obtains health and weight if BMI is requested on Android.
   void _handleBMI(List<HealthDataType> mTypes, List<int> mPermissions) {
     final index = mTypes.indexOf(HealthDataType.BODY_MASS_INDEX);

@@ -156,6 +156,7 @@ class HealthPlugin(private var channel: MethodChannel? = null) :
             // Permissions
             "hasPermissions" -> dataOperations.hasPermissions(call, result, useGoogleFit, context)
             "requestAuthorization" -> requestAuthorization(call, result)
+            "forceRequestAuthorization" -> forceRequestAuthorization(call,result)
             "revokePermissions" -> dataOperations.revokePermissions(call, result, useGoogleFit, context,activity )
 
             // History permissions
@@ -373,6 +374,56 @@ class HealthPlugin(private var channel: MethodChannel? = null) :
 
             healthConnectRequestPermissionsLauncher!!.launch(permList.toSet())
         }
+
+
+    }
+
+    private fun forceRequestAuthorization(call: MethodCall, result: Result) {
+        if (context == null) {
+            result.success(false)
+            return
+        }
+
+
+
+        if(useGoogleFit) {
+
+            if (activity == null) {
+
+                result.success(false)
+                return
+            }
+
+            val optionsToRegister =  HealthConstants.callToGoogleFitHealthTypes(call)
+            mResult = result
+
+
+            GoogleSignIn.requestPermissions(
+                activity!!,
+                GOOGLE_FIT_PERMISSIONS_REQUEST_CODE,
+                GoogleSignIn.getLastSignedInAccount(activity!!),
+                optionsToRegister
+            )
+        }else {
+            if (healthConnectRequestPermissionsLauncher == null) {
+                result.success(false)
+                Log.i("FLUTTER_HEALTH", "Permission launcher not found")
+                return
+            }
+
+            // Store the result to be called in onHealthConnectPermissionCallback
+
+            isReplySubmitted = false
+
+            val permList = dataOperations.preparePermissionsList(call)
+            if (permList == null) {
+                result.success(false)
+                return
+            }
+
+            healthConnectRequestPermissionsLauncher!!.launch(permList.toSet())
+        }
+
 
 
     }
