@@ -22,7 +22,7 @@ class HealthFixtures {
       'source_id': sourceId,
       'source_name': sourceName,
       'recording_method': recordingMethod,
-      if (metadata != null) 'metadata': metadata,
+      ...(metadata == null ? const <String, dynamic>{} : {'metadata': metadata}),
     };
   }
 
@@ -52,7 +52,7 @@ class HealthFixtures {
       'source_id': sourceId,
       'source_name': sourceName,
       'recording_method': recordingMethod,
-      if (metadata != null) 'metadata': metadata,
+      ...(metadata == null ? const <String, dynamic>{} : {'metadata': metadata}),
     };
   }
 
@@ -94,15 +94,8 @@ class HealthFixtures {
   }) {
     return {
       'changes': [
-        {
-          'type': 'upsert',
-          'dataTypeKey': HealthDataType.HEART_RATE.name,
-          'dataPoint': numericPoint(),
-        },
-        {
-          'type': 'delete',
-          'recordId': 'deleted-record-1',
-        },
+        {'type': 'upsert', 'dataTypeKey': HealthDataType.HEART_RATE.name, 'dataPoint': numericPoint()},
+        {'type': 'delete', 'recordId': 'deleted-record-1'},
       ],
       'nextChangesToken': nextToken,
       'hasMore': hasMore,

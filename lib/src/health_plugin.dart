@@ -202,7 +202,7 @@ class Health {
       return;
     }
   }
-  
+
 
   /// Is Google Health Connect available on this phone?
   ///

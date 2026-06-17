@@ -322,7 +322,7 @@ class HealthDataReader(
                                 healthPoint = if (tempData.isNotEmpty()) tempData[0] else mapOf()
                             }
                         }
-                        WORKOUT_ROUTE -> {
+                        HealthConstants.WORKOUT_ROUTE -> {
                             if (matchingRecord is ExerciseSessionRecord) {
                                 val routeMap = buildWorkoutRouteMap(
                                     matchingRecord,
