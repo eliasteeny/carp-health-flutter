@@ -42,6 +42,7 @@ class Health {
   String? _deviceId;
   final DeviceInfoPlugin _deviceInfo;
   HealthConnectSdkStatus _healthConnectSdkStatus = HealthConnectSdkStatus.sdkUnavailable;
+  bool _useGoogleFit = false;
 
   /// Get an instance of the health plugin.
   Health({DeviceInfoPlugin? deviceInfo}) : _deviceInfo = deviceInfo ?? DeviceInfoPlugin() {
@@ -177,7 +178,7 @@ class Health {
     if (Platform.isIOS) {
       return true;
     }
-     try {
+    try {
       return await _channel.invokeMethod<bool>('isGoogleFitAvailable') ?? false;
     } catch (e) {
       debugPrint('$runtimeType - Exception in isGoogleFitAvailable(): $e');
@@ -193,16 +194,14 @@ class Health {
     }
 
     try {
-      Map<String, dynamic> args = {
-        'status': useGoogleFit,
-      };
+      final args = <String, dynamic>{'status': useGoogleFit};
       await _channel.invokeMethod<bool>('useGoogleFit', args);
+      _useGoogleFit = useGoogleFit;
     } catch (e) {
       debugPrint('$runtimeType - Exception in useGoogleFit(): $e');
       return;
     }
   }
-
 
   /// Is Google Health Connect available on this phone?
   ///
@@ -229,6 +228,7 @@ class Health {
   /// Internal methods used to check availability before any getter or setter methods.
   Future<void> _checkIfHealthConnectAvailableOnAndroid() async {
     if (!Platform.isAndroid) return;
+    if (_useGoogleFit) return;
 
     if (!(await isHealthConnectAvailable())) {
       throw UnsupportedError(
@@ -437,16 +437,11 @@ class Health {
     return isAuthorized ?? false;
   }
 
-  /// Only on Anrdroid: forces auth request
-  Future<bool> forceRequestAuthorization(
-    List<HealthDataType> types, {
-    List<HealthDataAccess>? permissions,
-  }) async {
+  /// Only on Android: forces auth request
+  Future<bool> forceRequestAuthorization(List<HealthDataType> types, {List<HealthDataAccess>? permissions}) async {
     await _checkIfHealthConnectAvailableOnAndroid();
     if (permissions != null && permissions.length != types.length) {
-      throw ArgumentError(
-        'The length of [types] must be same as that of [permissions].',
-      );
+      throw ArgumentError('The length of [types] must be same as that of [permissions].');
     }
 
     if (permissions != null) {
@@ -469,21 +464,17 @@ class Health {
 
     final mTypes = List<HealthDataType>.from(types, growable: true);
     final mPermissions = permissions == null
-        ? List<int>.filled(
-            types.length,
-            HealthDataAccess.READ.index,
-            growable: true,
-          )
+        ? List<int>.filled(types.length, HealthDataAccess.READ.index, growable: true)
         : permissions.map((permission) => permission.index).toList();
 
     // on Android, if BMI is requested, then also ask for weight and height
     if (Platform.isAndroid) _handleBMI(mTypes, mPermissions);
 
     List<String> keys = mTypes.map((e) => e.name).toList();
-    final bool? isAuthorized = await _channel.invokeMethod(
-      'forceRequestAuthorization',
-      {'types': keys, "permissions": mPermissions},
-    );
+    final bool? isAuthorized = await _channel.invokeMethod('forceRequestAuthorization', {
+      'types': keys,
+      "permissions": mPermissions,
+    });
     return isAuthorized ?? false;
   }
 
@@ -757,10 +748,7 @@ class Health {
   ///    Must be equal to or earlier than [endTime].
   ///  * [endTime] - the end time when this [value] is measured.
   ///    Must be equal to or later than [startTime].
-  Future<bool> deleteMeals({
-    required DateTime startTime,
-    DateTime? endTime,
-  }) async {
+  Future<bool> deleteMeals({required DateTime startTime, DateTime? endTime}) async {
     await _checkIfHealthConnectAvailableOnAndroid();
     endTime ??= startTime;
     if (startTime.isAfter(endTime)) {
@@ -1351,10 +1339,7 @@ class Health {
   /// Fetch the next page of changes for a previously created token.
   ///
   /// Android only. Returns null on iOS or if an error occurs.
-  Future<HealthChangesResponse?> getChanges({
-    required String changesToken,
-    bool includeSelf = false,
-  }) async {
+  Future<HealthChangesResponse?> getChanges({required String changesToken, bool includeSelf = false}) async {
     if (Platform.isIOS) return null;
 
     await _checkIfHealthConnectAvailableOnAndroid();
@@ -1470,10 +1455,10 @@ class Health {
 
     if (fetchedDataPoints != null && fetchedDataPoints is List) {
       final msg = <String, dynamic>{"dataType": dataType, "dataPoints": fetchedDataPoints, "unit": unit};
-      const thresHold = 100;
+      const threshold = 100;
       // If the no. of data points are larger than the threshold,
       // call the compute method to spawn an Isolate to do the parsing in a separate thread.
-      if (fetchedDataPoints.length > thresHold) {
+      if (fetchedDataPoints.length > threshold) {
         return compute(_parse, msg);
       }
       return _parse(msg);
