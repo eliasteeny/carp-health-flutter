@@ -31,7 +31,9 @@ void main() {
     test('hasPermissions forwards default permissions', () async {
       ctx.channel.when('hasPermissions', true);
 
-      final result = await ctx.health.hasPermissions([HealthDataType.HEART_RATE, HealthDataType.WEIGHT]);
+      final result = await ctx.health.hasPermissions(
+        [HealthDataType.HEART_RATE, HealthDataType.WEIGHT],
+      );
 
       expect(result, isTrue);
       final call = ctx.channel.lastCallFor('hasPermissions');
@@ -53,8 +55,10 @@ void main() {
 
     test('requestAuthorization rejects write access for read-only types', () {
       expect(
-        () =>
-            ctx.health.requestAuthorization([HealthDataType.ELECTROCARDIOGRAM], permissions: [HealthDataAccess.WRITE]),
+        () => ctx.health.requestAuthorization(
+          [HealthDataType.ELECTROCARDIOGRAM],
+          permissions: [HealthDataAccess.WRITE],
+        ),
         throwsA(isA<ArgumentError>()),
       );
     });

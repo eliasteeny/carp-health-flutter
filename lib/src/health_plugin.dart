@@ -1339,7 +1339,10 @@ class Health {
   /// Fetch the next page of changes for a previously created token.
   ///
   /// Android only. Returns null on iOS or if an error occurs.
-  Future<HealthChangesResponse?> getChanges({required String changesToken, bool includeSelf = false}) async {
+  Future<HealthChangesResponse?> getChanges({
+    required String changesToken,
+    bool includeSelf = false,
+  }) async {
     if (Platform.isIOS) return null;
 
     await _checkIfHealthConnectAvailableOnAndroid();
@@ -1455,10 +1458,10 @@ class Health {
 
     if (fetchedDataPoints != null && fetchedDataPoints is List) {
       final msg = <String, dynamic>{"dataType": dataType, "dataPoints": fetchedDataPoints, "unit": unit};
-      const threshold = 100;
+      const thresHold = 100;
       // If the no. of data points are larger than the threshold,
       // call the compute method to spawn an Isolate to do the parsing in a separate thread.
-      if (fetchedDataPoints.length > threshold) {
+      if (fetchedDataPoints.length > thresHold) {
         return compute(_parse, msg);
       }
       return _parse(msg);
@@ -1583,7 +1586,7 @@ class Health {
     HealthDataType.HEADACHE_SEVERE => 4,
     _ => throw HealthException(
       type,
-      "HealthDataType was not aligned correctly - please report bug at https://github.com/cph-cachet/flutter-plugins/issues",
+      "HealthDataType was not aligned correctly - please report bug at https://github.com/carp-dk/carp-health-flutter/issues",
     ),
   };
 
