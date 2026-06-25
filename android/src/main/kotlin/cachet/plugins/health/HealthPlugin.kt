@@ -52,6 +52,7 @@ class HealthPlugin(private var channel: MethodChannel? = null) :
     private lateinit var dataWriter: HealthDataWriter
     private lateinit var dataOperations: HealthDataOperations
     private lateinit var dataConverter: HealthDataConverter
+    private lateinit var dataChanges: HealthDataChanges
 
     // Health Connect availability
     private var healthConnectAvailable = false
@@ -174,6 +175,8 @@ class HealthPlugin(private var channel: MethodChannel? = null) :
                     dataOperations.isHealthDataInBackgroundAuthorized(call, result)
             "requestHealthDataInBackgroundAuthorization" ->
                     requestHealthDataInBackgroundAuthorization(call, result)
+            "isSkinTemperatureAvailable" ->
+                    dataOperations.isSkinTemperatureAvailable(call, result)
 
             // Reading data
             "getData" -> dataReader.getData(call, result, useGoogleFit, context, threadPoolExecutor )
@@ -181,6 +184,8 @@ class HealthPlugin(private var channel: MethodChannel? = null) :
             "getIntervalData" -> dataReader.getIntervalData(call, result)
             "getAggregateData" -> dataReader.getAggregateData(call, result)
             "getTotalStepsInInterval" -> dataReader.getTotalStepsInInterval(call, result)
+            "getChangesToken" -> dataChanges.getChangesToken(call, result)
+            "getChanges" -> dataChanges.getChanges(call, result)
 
             // Writing data
             "writeData" -> dataWriter.writeData(call, result,useGoogleFit, context)
@@ -189,6 +194,11 @@ class HealthPlugin(private var channel: MethodChannel? = null) :
             "writeBloodOxygen" -> dataWriter.writeBloodOxygen(call, result,useGoogleFit, context)
             "writeMenstruationFlow" -> dataWriter.writeMenstruationFlow(call, result,useGoogleFit, context)
             "writeMeal" -> dataWriter.writeMeal(call, result,useGoogleFit, context)
+            "writeActivityIntensity" -> dataWriter.writeActivityIntensity(call, result)
+            "startWorkoutRoute" -> dataWriter.startWorkoutRoute(result)
+            "insertWorkoutRouteData" -> dataWriter.insertWorkoutRouteData(call, result)
+            "finishWorkoutRoute" -> dataWriter.finishWorkoutRoute(call, result)
+            "discardWorkoutRoute" -> dataWriter.discardWorkoutRoute(call, result)
             // TODO: Add support for multiple speed for iOS as well
             // "writeMultipleSpeed" -> dataWriter.writeMultipleSpeedData(call, result)
 
@@ -268,6 +278,7 @@ class HealthPlugin(private var channel: MethodChannel? = null) :
                         healthConnectStatus,
                         healthConnectAvailable
                 )
+        dataChanges = HealthDataChanges(healthConnectClient, scope, context!!, dataConverter)
     }
 
     /**

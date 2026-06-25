@@ -90,6 +90,7 @@ enum HealthDataType {
   SLEEP_UNKNOWN,
   EXERCISE_TIME,
   WORKOUT,
+  WORKOUT_ROUTE,
   HEADACHE_NOT_PRESENT,
   HEADACHE_MILD,
   HEADACHE_MODERATE,
@@ -104,6 +105,7 @@ enum HealthDataType {
   MENSTRUATION_FLOW,
   WATER_TEMPERATURE,
   UNDERWATER_DEPTH,
+  SLEEP_WRIST_TEMPERATURE,
 
   // Heart Rate events (specific to Apple Watch)
   HIGH_HEART_RATE_EVENT,
@@ -114,14 +116,12 @@ enum HealthDataType {
 
   // Health Connect
   TOTAL_CALORIES_BURNED,
+  ACTIVITY_INTENSITY,
+  SKIN_TEMPERATURE,
 }
 
 /// Access types for Health Data.
-enum HealthDataAccess {
-  READ,
-  WRITE,
-  READ_WRITE,
-}
+enum HealthDataAccess { READ, WRITE, READ_WRITE }
 
 /// List of data types available on iOS.
 const List<HealthDataType> dataTypeKeysIOS = [
@@ -209,6 +209,7 @@ const List<HealthDataType> dataTypeKeysIOS = [
   HealthDataType.WATER,
   HealthDataType.EXERCISE_TIME,
   HealthDataType.WORKOUT,
+  HealthDataType.WORKOUT_ROUTE,
   HealthDataType.HEADACHE_NOT_PRESENT,
   HealthDataType.HEADACHE_MILD,
   HealthDataType.HEADACHE_MODERATE,
@@ -224,6 +225,7 @@ const List<HealthDataType> dataTypeKeysIOS = [
   HealthDataType.UNDERWATER_DEPTH,
   HealthDataType.UV_INDEX,
   HealthDataType.TOTAL_CALORIES_BURNED,
+  HealthDataType.SLEEP_WRIST_TEMPERATURE,
 ];
 
 /// List of data types available on Android
@@ -256,6 +258,7 @@ const List<HealthDataType> dataTypeKeysAndroid = [
   HealthDataType.SLEEP_UNKNOWN,
   HealthDataType.WATER,
   HealthDataType.WORKOUT,
+  HealthDataType.WORKOUT_ROUTE,
   HealthDataType.RESTING_HEART_RATE,
   HealthDataType.FLIGHTS_CLIMBED,
   HealthDataType.BASAL_ENERGY_BURNED,
@@ -263,6 +266,8 @@ const List<HealthDataType> dataTypeKeysAndroid = [
   HealthDataType.NUTRITION,
   HealthDataType.TOTAL_CALORIES_BURNED,
   HealthDataType.MENSTRUATION_FLOW,
+  HealthDataType.ACTIVITY_INTENSITY,
+  HealthDataType.SKIN_TEMPERATURE,
 ];
 
 /// Maps a [HealthDataType] to a [HealthDataUnit].
@@ -282,6 +287,7 @@ const Map<HealthDataType, HealthDataUnit> dataTypeToUnit = {
   HealthDataType.LEAN_BODY_MASS: HealthDataUnit.KILOGRAM,
   HealthDataType.BODY_MASS_INDEX: HealthDataUnit.NO_UNIT,
   HealthDataType.BODY_TEMPERATURE: HealthDataUnit.DEGREE_CELSIUS,
+  HealthDataType.SLEEP_WRIST_TEMPERATURE: HealthDataUnit.DEGREE_CELSIUS,
   HealthDataType.BODY_WATER_MASS: HealthDataUnit.KILOGRAM,
   HealthDataType.DIETARY_CARBS_CONSUMED: HealthDataUnit.GRAM,
   HealthDataType.DIETARY_CAFFEINE: HealthDataUnit.GRAM,
@@ -357,6 +363,7 @@ const Map<HealthDataType, HealthDataUnit> dataTypeToUnit = {
   HealthDataType.MINDFULNESS: HealthDataUnit.MINUTE,
   HealthDataType.EXERCISE_TIME: HealthDataUnit.MINUTE,
   HealthDataType.WORKOUT: HealthDataUnit.NO_UNIT,
+  HealthDataType.WORKOUT_ROUTE: HealthDataUnit.NO_UNIT,
 
   HealthDataType.HEADACHE_NOT_PRESENT: HealthDataUnit.MINUTE,
   HealthDataType.HEADACHE_MILD: HealthDataUnit.MINUTE,
@@ -384,6 +391,8 @@ const Map<HealthDataType, HealthDataUnit> dataTypeToUnit = {
 
   // Health Connect
   HealthDataType.TOTAL_CALORIES_BURNED: HealthDataUnit.KILOCALORIE,
+  HealthDataType.ACTIVITY_INTENSITY: HealthDataUnit.MINUTE,
+  HealthDataType.SKIN_TEMPERATURE: HealthDataUnit.DEGREE_CELSIUS,
 };
 
 // const PlatformTypeJsonValue = {
@@ -587,13 +596,7 @@ enum HealthWorkoutActivityType {
   OTHER,
 }
 
-enum MealType {
-  BREAKFAST,
-  LUNCH,
-  DINNER,
-  SNACK,
-  UNKNOWN,
-}
+enum MealType { BREAKFAST, LUNCH, DINNER, SNACK, UNKNOWN }
 
 /// Classifications for ECG readings.
 enum ElectrocardiogramClassification {
@@ -608,23 +611,18 @@ enum ElectrocardiogramClassification {
 }
 
 /// Types of insulin delivery reason
-enum InsulinDeliveryReason {
-  NOT_SET,
-  BASAL,
-  BOLUS,
-}
+enum InsulinDeliveryReason { NOT_SET, BASAL, BOLUS }
 
 /// Extension to assign numbers to [ElectrocardiogramClassification]s
-extension ElectrocardiogramClassificationValue
-    on ElectrocardiogramClassification {
+extension ElectrocardiogramClassificationValue on ElectrocardiogramClassification {
   int get value => switch (this) {
-        ElectrocardiogramClassification.NOT_SET => 0,
-        ElectrocardiogramClassification.SINUS_RHYTHM => 1,
-        ElectrocardiogramClassification.ATRIAL_FIBRILLATION => 2,
-        ElectrocardiogramClassification.INCONCLUSIVE_LOW_HEART_RATE => 3,
-        ElectrocardiogramClassification.INCONCLUSIVE_HIGH_HEART_RATE => 4,
-        ElectrocardiogramClassification.INCONCLUSIVE_POOR_READING => 5,
-        ElectrocardiogramClassification.INCONCLUSIVE_OTHER => 6,
-        ElectrocardiogramClassification.UNRECOGNIZED => 100,
-      };
+    ElectrocardiogramClassification.NOT_SET => 0,
+    ElectrocardiogramClassification.SINUS_RHYTHM => 1,
+    ElectrocardiogramClassification.ATRIAL_FIBRILLATION => 2,
+    ElectrocardiogramClassification.INCONCLUSIVE_LOW_HEART_RATE => 3,
+    ElectrocardiogramClassification.INCONCLUSIVE_HIGH_HEART_RATE => 4,
+    ElectrocardiogramClassification.INCONCLUSIVE_POOR_READING => 5,
+    ElectrocardiogramClassification.INCONCLUSIVE_OTHER => 6,
+    ElectrocardiogramClassification.UNRECOGNIZED => 100,
+  };
 }

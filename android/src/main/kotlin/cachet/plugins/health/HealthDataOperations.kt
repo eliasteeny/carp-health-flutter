@@ -10,6 +10,7 @@ import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.permission.HealthPermission.Companion.PERMISSION_READ_HEALTH_DATA_HISTORY
 import androidx.health.connect.client.permission.HealthPermission.Companion.PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND
 import androidx.health.connect.client.records.NutritionRecord
+import androidx.health.connect.client.records.ExerciseSessionRecord
 import androidx.health.connect.client.time.TimeRangeFilter
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.fitness.Fitness
@@ -218,6 +219,23 @@ class HealthDataOperations(
                             .permissionController
                             .getGrantedPermissions()
                             .containsAll(listOf(PERMISSION_READ_HEALTH_DATA_IN_BACKGROUND)),
+            )
+        }
+    }
+
+    /**
+     * Checks if Skin Temperature data is available on the current device.
+     * Availability is device-specific and exposed via Health Connect features.
+     *
+     * @param call Method call from Flutter (unused)
+     * @param result Flutter result callback returning boolean availability status
+     */
+    fun isSkinTemperatureAvailable(call: MethodCall, result: Result) {
+        scope.launch {
+            result.success(
+                    healthConnectClient.features.getFeatureStatus(
+                            HealthConnectFeatures.FEATURE_SKIN_TEMPERATURE
+                    ) == HealthConnectFeatures.FEATURE_STATUS_AVAILABLE
             )
         }
     }
@@ -505,6 +523,26 @@ class HealthDataOperations(
         val permList = mutableListOf<String>()
 
         for ((i, typeKey) in types.withIndex()) {
+            if (typeKey == HealthConstants.WORKOUT_ROUTE) {
+                val access = permissions[i]
+                val sessionRead =
+                    HealthPermission.getReadPermission(ExerciseSessionRecord::class)
+                val sessionWrite =
+                    HealthPermission.getWritePermission(ExerciseSessionRecord::class)
+                when (access) {
+                    0 -> permList.add(sessionRead)
+                    1 -> {
+                        permList.add(HealthPermission.PERMISSION_WRITE_EXERCISE_ROUTE)
+                        permList.add(sessionWrite)
+                    }
+                    else -> {
+                        permList.add(sessionRead)
+                        permList.add(sessionWrite)
+                        permList.add(HealthPermission.PERMISSION_WRITE_EXERCISE_ROUTE)
+                    }
+                }
+                continue
+            }
             if (!HealthConstants.mapToType.containsKey(typeKey)) {
                 Log.w("FLUTTER_HEALTH::ERROR", "Datatype $typeKey not found in HC")
                 return null
