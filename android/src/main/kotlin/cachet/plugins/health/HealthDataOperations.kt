@@ -30,11 +30,13 @@ import java.util.concurrent.TimeUnit
  * operations. Manages the administrative aspects of Health Connect integration.
  */
 class HealthDataOperations(
-        private val healthConnectClient: HealthConnectClient,
+        private val healthConnectClientOrNull: HealthConnectClient?,
         private val scope: CoroutineScope,
         private val healthConnectStatus: Int,
         private val healthConnectAvailable: Boolean
 ) {
+    private val healthConnectClient: HealthConnectClient
+        get() = checkNotNull(healthConnectClientOrNull) { "Health Connect is not available" }
 
     /**
      * Retrieves the current Health Connect SDK availability status. Returns status codes indicating

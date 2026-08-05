@@ -43,7 +43,7 @@ class HealthPlugin(private var channel: MethodChannel? = null) :
     private var activity: Activity? = null
     private var context: Context? = null
     private var healthConnectRequestPermissionsLauncher: ActivityResultLauncher<Set<String>>? = null
-    private lateinit var healthConnectClient: HealthConnectClient
+    private var healthConnectClient: HealthConnectClient? = null
     private lateinit var scope: CoroutineScope
     private var isReplySubmitted = false
 
@@ -84,8 +84,8 @@ class HealthPlugin(private var channel: MethodChannel? = null) :
         if (healthConnectAvailable) {
             healthConnectClient =
                     HealthConnectClient.getOrCreate(flutterPluginBinding.applicationContext)
-            initializeHelpers()
         }
+        initializeHelpers()
     }
 
     /**
@@ -147,7 +147,7 @@ class HealthPlugin(private var channel: MethodChannel? = null) :
             "useGoogleFit" -> useGoogleFit(call, result)
             "getHealthConnectSdkStatus" -> {
                 checkAvailability()
-                if (healthConnectAvailable && !(this::dataOperations.isInitialized)) {
+                if (healthConnectAvailable && healthConnectClient == null) {
                     healthConnectClient = HealthConnectClient.getOrCreate(context!!)
                     initializeHelpers()
                 }

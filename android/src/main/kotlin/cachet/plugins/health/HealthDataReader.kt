@@ -43,11 +43,14 @@ import java.util.concurrent.TimeUnit
  * Manages data retrieval, filtering, aggregation, and format conversion for Flutter consumption.
  */
 class HealthDataReader(
-    private val healthConnectClient: HealthConnectClient,
+    private val healthConnectClientOrNull: HealthConnectClient?,
     private val scope: CoroutineScope,
     private val context: Context,
     private val dataConverter: HealthDataConverter
 ) {
+    private val healthConnectClient: HealthConnectClient
+        get() = checkNotNull(healthConnectClientOrNull) { "Health Connect is not available" }
+
     private val recordingFilter = HealthRecordingFilter()
 
     /**

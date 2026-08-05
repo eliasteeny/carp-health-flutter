@@ -19,11 +19,14 @@ import kotlin.reflect.KClass
  * Converts change records into Flutter-friendly maps for consumption on the Dart side.
  */
 class HealthDataChanges(
-    private val healthConnectClient: HealthConnectClient,
+    private val healthConnectClientOrNull: HealthConnectClient?,
     private val scope: CoroutineScope,
     private val context: Context,
     private val dataConverter: HealthDataConverter
 ) {
+    private val healthConnectClient: HealthConnectClient
+        get() = checkNotNull(healthConnectClientOrNull) { "Health Connect is not available" }
+
     /**
      * Creates a changes token for the requested record types.
      *

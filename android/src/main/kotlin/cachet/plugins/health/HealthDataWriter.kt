@@ -33,9 +33,12 @@ import java.util.concurrent.TimeUnit
  * Health Connect format.
  */
 class HealthDataWriter(
-        private val healthConnectClient: HealthConnectClient,
+        private val healthConnectClientOrNull: HealthConnectClient?,
         private val scope: CoroutineScope
 ) {
+    private val healthConnectClient: HealthConnectClient
+        get() = checkNotNull(healthConnectClientOrNull) { "Health Connect is not available" }
+
     private val workoutRouteBuilders =
         mutableMapOf<String, MutableList<ExerciseRoute.Location>>()
 
